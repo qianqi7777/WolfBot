@@ -1,0 +1,16 @@
+node_modules/
+dist/
+.vite/
+.cache/
+.pnpm-store/
+.env
+.env.*.local
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+coverage/
+*.log

@@ -38,6 +38,15 @@
 - Redis 7.x
 - PostgreSQL 16 或本地开发使用 SQLite
 
+## 快速开始
+
+1. 复制环境变量模板：
+   - `cp .env.example .env`（Windows 可手动复制）
+2. 安装依赖：
+   - `python -m pip install -r requirements.txt`
+3. 启动服务：
+   - `uvicorn app.main:app --reload --host 0.0.0.0 --port 8000`
+
 ## 开发原则
 
 - 规则与裁决都在后端

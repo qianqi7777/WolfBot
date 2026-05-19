@@ -27,21 +27,32 @@
 
 - Node.js 20 或更高版本
 - pnpm 9 或更高版本，推荐作为默认包管理器
+- Python 3.11 或更高版本（后端）
 - 可访问的后端服务，提供 REST 接口与 WebSocket 服务
 
 ## 快速开始
 
-1. 安装依赖。
-2. 配置环境变量，至少提供后端 API 地址和 WebSocket 地址。
-3. 启动开发服务。
+1. 进入 `frontend/` 安装依赖并启动前端。
+2. 进入 `backend/` 安装依赖并启动后端。
+3. 配置环境变量（参考各自目录下的 `.env.example`）。
 4. 打开首页，创建房间或加入房间。
 
-如果后续初始化为标准前端工程，建议提供以下脚本：
+前端常用脚本：
 
 - `pnpm dev`：启动开发环境
 - `pnpm build`：生成生产构建
 - `pnpm preview`：本地预览构建结果
 - `pnpm lint`：代码检查
+
+后端启动示例：
+
+- `python -m pip install -r requirements.txt`
+- `uvicorn app.main:app --reload --host 0.0.0.0 --port 8000`
+
+## 项目结构
+
+- `frontend/`：Vue 3 + Vite 前端工程
+- `backend/`：FastAPI + WebSocket 后端工程
 
 ## 推荐目录约定
 
