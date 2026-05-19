@@ -1,5 +1,3 @@
-from collections.abc import Iterable
-
 from fastapi import WebSocket
 
 
@@ -19,3 +17,6 @@ class ConnectionManager:
     async def broadcast(self, game_id: str, message: str) -> None:
         for websocket in list(self.connections.get(game_id, [])):
             await websocket.send_text(message)
+
+    async def send_to(self, websocket: WebSocket, message: str) -> None:
+        await websocket.send_text(message)

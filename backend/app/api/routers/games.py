@@ -1,7 +1,16 @@
 from fastapi import APIRouter
 
 from app.schemas.game import CreateGameRequest, GameResult, GameSnapshot, JoinGameRequest, SpeakRequest, VoteRequest
-from app.services.game_service import create_game, get_game, get_result, join_game, record_speak, record_vote
+from app.services.game_service import (
+    create_game,
+    get_game,
+    get_result,
+    join_game,
+    record_speak,
+    record_vote,
+    start_game,
+)
+from app.services.ai_service import launch_ai_cycle
 
 router = APIRouter(prefix="/games", tags=["games"])
 
@@ -21,15 +30,22 @@ async def get_game_route(game_id: str) -> GameSnapshot:
     return get_game(game_id)
 
 
+@router.post("/{game_id}/start", response_model=GameSnapshot)
+async def start_game_route(game_id: str) -> GameSnapshot:
+    snapshot = start_game(game_id)
+    launch_ai_cycle(game_id)
+    return snapshot
+
+
 @router.post("/{game_id}/action/speak")
 async def speak_route(game_id: str, payload: SpeakRequest) -> dict[str, str]:
-    record_speak(game_id, payload.content)
+    record_speak(game_id, payload.player_id, payload.content)
     return {"status": "accepted"}
 
 
 @router.post("/{game_id}/action/vote")
 async def vote_route(game_id: str, payload: VoteRequest) -> dict[str, str]:
-    record_vote(game_id, payload.target_id)
+    record_vote(game_id, payload.player_id, payload.target_id)
     return {"status": "accepted"}
 
 

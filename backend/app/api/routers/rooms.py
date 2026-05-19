@@ -1,7 +1,7 @@
 from fastapi import APIRouter
 
 from app.schemas.game import CreateGameRequest, GameSnapshot, JoinGameRequest
-from app.services.room_service import create_room, get_room, join_room
+from app.services.room_service import create_room, get_room, join_room, start_room
 
 router = APIRouter(prefix="/rooms", tags=["rooms"])
 
@@ -19,3 +19,8 @@ async def join_room_route(game_id: str, payload: JoinGameRequest) -> GameSnapsho
 @router.get("/{game_id}", response_model=GameSnapshot)
 async def get_room_route(game_id: str) -> GameSnapshot:
     return get_room(game_id)
+
+
+@router.post("/{game_id}/start", response_model=GameSnapshot)
+async def start_room_route(game_id: str) -> GameSnapshot:
+    return start_room(game_id)

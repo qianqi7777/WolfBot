@@ -45,7 +45,16 @@
 2. 安装依赖：
    - `python -m pip install -r requirements.txt`
 3. 启动服务：
-   - `uvicorn app.main:app --reload --host 0.0.0.0 --port 8000`
+    - `uvicorn app.main:app --reload --host 0.0.0.0 --port 8000`
+
+## AI 接入
+
+- 默认启用 mock，不配置也能跑。
+- 真实 AI 需要配置，并把 `AI_ENABLE_MOCK=false`：
+  - `AI_API_BASE_URL`
+  - `AI_API_KEY`
+  - `AI_MODEL`
+- 请求兼容 OpenAI 风格的 `/chat/completions` 接口。
 
 ## 开发原则
 

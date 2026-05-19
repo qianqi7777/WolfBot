@@ -18,10 +18,13 @@ class RoleType(str, Enum):
 
 
 class MessageType(str, Enum):
+    room_update = "room_update"
     announce = "announce"
     ai_speak = "ai_speak"
+    player_speak = "player_speak"
     vote_result = "vote_result"
     game_status = "game_status"
     role_info = "role_info"
     player_update = "player_update"
     game_over = "game_over"
+    error = "error"

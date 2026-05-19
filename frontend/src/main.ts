@@ -7,4 +7,6 @@ import router from './router';
 import { pinia } from './store';
 import '@/assets/css/main.css';
 
+document.title = import.meta.env.VITE_APP_TITLE || 'WolfBot';
+
 createApp(App).use(pinia).use(router).use(ElementPlus).mount('#app');

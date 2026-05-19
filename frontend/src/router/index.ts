@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router';
 
+import { getGame } from '@/api/gameApi';
 import { useGameStore } from '@/store/modules/gameStore';
 
 const HomeView = () => import('@/views/HomeView.vue');
@@ -17,9 +18,22 @@ const router = createRouter({
   ],
 });
 
-router.beforeEach((to) => {
-  if ((to.name === 'room' || to.name === 'game' || to.name === 'result') && !useGameStore().gameId) {
-    return { name: 'home' };
+router.beforeEach(async (to) => {
+  const store = useGameStore();
+  if (to.name === 'room' || to.name === 'game' || to.name === 'result') {
+    const gameId = typeof to.params.gameId === 'string' ? to.params.gameId : '';
+    if (!gameId) {
+      return { name: 'home' };
+    }
+
+    if (!store.gameId || store.gameId !== gameId) {
+      try {
+        store.restoreSession();
+        store.applySnapshot(await getGame(gameId), store.myId || undefined);
+      } catch {
+        return { name: 'home' };
+      }
+    }
   }
   return true;
 });

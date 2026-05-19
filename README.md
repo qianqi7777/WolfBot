@@ -49,6 +49,12 @@
 - `python -m pip install -r requirements.txt`
 - `uvicorn app.main:app --reload --host 0.0.0.0 --port 8000`
 
+## AI 接入
+
+- 默认启用 mock，没配真实 API 也能先玩。
+- 真实 AI 需要配置：`AI_API_BASE_URL`、`AI_API_KEY`、`AI_MODEL`，并把 `AI_ENABLE_MOCK=false`
+- 兼容 OpenAI 风格的 `POST /chat/completions`
+
 ## 项目结构
 
 - `frontend/`：Vue 3 + Vite 前端工程

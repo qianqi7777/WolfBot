@@ -1,5 +1,5 @@
 from app.schemas.game import GameSnapshot
-from app.services.game_service import create_game, get_game, join_game
+from app.services.game_service import create_game, get_game, join_game, start_game
 
 
 def create_room(player_name: str) -> GameSnapshot:
@@ -12,3 +12,7 @@ def join_room(game_id: str, player_name: str) -> GameSnapshot:
 
 def get_room(game_id: str) -> GameSnapshot:
     return get_game(game_id)
+
+
+def start_room(game_id: str) -> GameSnapshot:
+    return start_game(game_id)
