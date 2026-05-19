@@ -9,7 +9,7 @@ export function canVote(status: GameStatus): boolean {
 }
 
 export function canSpeak(status: GameStatus): boolean {
-  return status === 'speak' || status === 'day';
+  return status === 'speak';
 }
 
 export function canNightAction(status: GameStatus, role: RoleType): boolean {

@@ -23,6 +23,7 @@ class MessageType(str, Enum):
     announce = "announce"
     ai_speak = "ai_speak"
     player_speak = "player_speak"
+    speak_turn = "speak_turn"
     vote_result = "vote_result"
     game_status = "game_status"
     role_info = "role_info"

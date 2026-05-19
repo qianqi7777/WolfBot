@@ -28,6 +28,7 @@ async def game_ws(websocket: WebSocket) -> None:
                 payload={
                     "gameId": snapshot.game_id,
                     "players": [player.model_dump(by_alias=True) for player in snapshot.players],
+                    "currentSpeakerId": snapshot.current_speaker_id,
                     "roomSettings": snapshot.room_settings.model_dump(by_alias=True),
                 },
             ).model_dump_json(),
@@ -37,7 +38,11 @@ async def game_ws(websocket: WebSocket) -> None:
             SocketMessage(
                 type=MessageType.game_status,
                 timestamp=utc_now_iso(),
-                payload={"status": snapshot.game_status.value, "currentRound": snapshot.current_round},
+                payload={
+                    "status": snapshot.game_status.value,
+                    "currentRound": snapshot.current_round,
+                    "currentSpeakerId": snapshot.current_speaker_id,
+                },
             ).model_dump_json(),
         )
         if player_id:
@@ -139,7 +144,11 @@ async def game_ws(websocket: WebSocket) -> None:
                     SocketMessage(
                         type=MessageType.game_status,
                         timestamp=utc_now_iso(),
-                        payload={"status": started_snapshot.game_status.value, "currentRound": started_snapshot.current_round},
+                        payload={
+                            "status": started_snapshot.game_status.value,
+                            "currentRound": started_snapshot.current_round,
+                            "currentSpeakerId": started_snapshot.current_speaker_id,
+                        },
                     ).model_dump_json(),
                 )
                 if player_id:

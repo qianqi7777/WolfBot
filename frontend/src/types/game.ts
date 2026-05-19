@@ -24,6 +24,14 @@ export interface AiConfigView extends Omit<AiConfigForm, 'apiKey'> {
   hasApiKey: boolean;
 }
 
+export interface AiConnectionTestResult {
+  success: boolean;
+  message: string;
+  baseUrl: string;
+  model: string;
+  enableMock: boolean;
+}
+
 export interface RoomSettings {
   scene: SceneConfig;
   ai: AiConfigView;
@@ -72,6 +80,13 @@ export interface GameResultPayload {
   announcements: string[];
 }
 
+export interface SpeakTurnPayload {
+  currentSpeakerId: string | null;
+  currentSpeakerName?: string;
+  turnIndex?: number;
+  turnCount?: number;
+}
+
 // 夜间行动请求载荷
 export interface NightActionPayload {
   targetId: string;
@@ -93,6 +108,7 @@ export interface GameSnapshot {
   playerId: string;
   gameStatus: GameStatus;
   currentRound: number;
+  currentSpeakerId: string | null;
   started: boolean;
   winnerFaction: string | null;
   players: Player[];
@@ -114,6 +130,7 @@ export interface SocketMessage<TPayload = Record<string, unknown>> {
     | 'game_over'
     | 'night_action'
     | 'night_result'
+    | 'speak_turn'
     | 'error';
   payload?: TPayload;
   timestamp?: string;

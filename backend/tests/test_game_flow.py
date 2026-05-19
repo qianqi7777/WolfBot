@@ -96,3 +96,74 @@ def test_guard_blocks_wolf_attack() -> None:
     assert result["guard_blocked"] is True
     assert result["killed_player_id"] is None
     assert target.is_alive is True
+
+
+def test_speak_phase_requires_current_speaker() -> None:
+    client = TestClient(app)
+
+    created = client.post("/api/games", json={"playerName": "玩家A"})
+    assert created.status_code == 200
+    game_id = created.json()["gameId"]
+
+    start_game(game_id)
+    state = get_game_state(game_id)
+    speaker = state.players[0]
+    other_player = state.players[1]
+
+    state.game_status = GameStatus.speak
+    state.current_speaker_id = speaker.id
+    state.speak_order = [speaker.id, other_player.id]
+    state.speak_turn_submitted = False
+
+    accepted = client.post(
+        f"/api/games/{game_id}/action/speak",
+        json={"playerId": speaker.id, "content": "轮到我发言"},
+    )
+    assert accepted.status_code == 200
+
+    blocked = client.post(
+        f"/api/games/{game_id}/action/speak",
+        json={"playerId": other_player.id, "content": "抢发言"},
+    )
+    assert blocked.status_code == 409
+
+
+def test_ai_connection_route_uses_room_settings(monkeypatch) -> None:
+    client = TestClient(app)
+
+    created = client.post("/api/games", json={"playerName": "玩家A"})
+    assert created.status_code == 200
+    game_id = created.json()["gameId"]
+
+    updated = client.patch(
+        f"/api/rooms/{game_id}/settings",
+        json={
+            "scene": {
+                "preset": "six-player-dark",
+                "name": "6人暗牌场",
+                "description": "2狼4好人，神职为预言家和守卫，暗牌局，无警长，节奏快。",
+                "playerCount": 6,
+            },
+            "ai": {
+                "baseUrl": "https://example.com/v1",
+                "apiKey": "secret-key",
+                "model": "gpt-4o-mini",
+                "timeoutSeconds": 15,
+                "temperature": 0.5,
+                "enableMock": False,
+            },
+        },
+    )
+    assert updated.status_code == 200
+
+    async def fake_post_openai_compatible(runtime, messages, response_format=None):
+        return "连通成功"
+
+    monkeypatch.setattr("app.services.ai_service._post_openai_compatible", fake_post_openai_compatible)
+
+    tested = client.post(f"/api/rooms/{game_id}/ai/test")
+    assert tested.status_code == 200
+    payload = tested.json()
+    assert payload["success"] is True
+    assert payload["baseUrl"] == "https://example.com/v1"
+    assert payload["enableMock"] is False

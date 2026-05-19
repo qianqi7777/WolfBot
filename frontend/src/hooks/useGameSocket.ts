@@ -7,6 +7,7 @@ import type {
   GameResultPayload,
   GameStatus,
   NightResultPayload,
+  SpeakTurnPayload,
   Player,
   RoomSettings,
   RoleType,
@@ -31,6 +32,10 @@ function isRoleType(value: unknown): value is RoleType {
 
 function isBoolean(value: unknown): value is boolean {
   return typeof value === 'boolean';
+}
+
+function isNullableString(value: unknown): value is string | null {
+  return typeof value === 'string' || value === null;
 }
 
 function isPlayer(value: unknown): value is Player {
@@ -136,7 +141,9 @@ export function useGameSocket() {
     }
   };
 
-  const handleRoomUpdate = (message: SocketMessage<{ gameId?: string; players?: unknown[]; roomSettings?: unknown }>) => {
+  const handleRoomUpdate = (
+    message: SocketMessage<{ gameId?: string; players?: unknown[]; roomSettings?: unknown; currentSpeakerId?: unknown }>,
+  ) => {
     if (!Array.isArray(message.payload?.players)) {
       return;
     }
@@ -148,12 +155,22 @@ export function useGameSocket() {
     if (isRecord(message.payload) && isRoomSettings(message.payload.roomSettings)) {
       store.setRoomSettings(message.payload.roomSettings);
     }
+    if (isNullableString(message.payload?.currentSpeakerId)) {
+      store.setCurrentSpeakerId(message.payload.currentSpeakerId);
+    }
   };
 
   const handleSocketMessage = (message: SocketMessage) => {
     switch (message.type) {
       case 'room_update':
-        handleRoomUpdate(message as SocketMessage<{ gameId?: string; players?: unknown[]; roomSettings?: unknown }>);
+        handleRoomUpdate(
+          message as SocketMessage<{
+            gameId?: string;
+            players?: unknown[];
+            roomSettings?: unknown;
+            currentSpeakerId?: unknown;
+          }>,
+        );
         break;
       case 'announce':
         store.addAnnounce(String(message.payload?.content ?? ''));
@@ -164,9 +181,15 @@ export function useGameSocket() {
           if (message.payload.status !== 'night') {
             store.setNightActionRequired(false);
           }
+          if (message.payload.status !== 'speak') {
+            store.setCurrentSpeakerId(null);
+          }
         }
         if (typeof message.payload?.currentRound === 'number') {
           store.setCurrentRound(message.payload.currentRound);
+        }
+        if (isNullableString(message.payload?.currentSpeakerId)) {
+          store.setCurrentSpeakerId(message.payload.currentSpeakerId);
         }
         break;
       case 'role_info':
@@ -190,6 +213,14 @@ export function useGameSocket() {
             time: message.timestamp ?? new Date().toISOString(),
             isAI: message.type === 'ai_speak' || Boolean(message.payload?.isAI),
           });
+        }
+        break;
+      case 'speak_turn':
+        if (isRecord(message.payload)) {
+          const payload = message.payload as SpeakTurnPayload;
+          if (isNullableString(payload.currentSpeakerId)) {
+            store.setCurrentSpeakerId(payload.currentSpeakerId);
+          }
         }
         break;
       case 'vote_result':

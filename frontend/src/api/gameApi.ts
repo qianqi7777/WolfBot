@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-import type { GameResultPayload, GameSnapshot, RoomSettingsForm } from '@/types/game';
+import type { AiConnectionTestResult, GameResultPayload, GameSnapshot, RoomSettingsForm } from '@/types/game';
 
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000',
@@ -36,6 +36,11 @@ export async function startGame(gameId: string): Promise<GameSnapshot> {
 
 export async function updateRoomSettings(gameId: string, settings: RoomSettingsForm): Promise<GameSnapshot> {
   const { data } = await api.patch<GameSnapshot>(`/api/rooms/${gameId}/settings`, settings);
+  return data;
+}
+
+export async function testRoomAiConnection(gameId: string): Promise<AiConnectionTestResult> {
+  const { data } = await api.post<AiConnectionTestResult>(`/api/rooms/${gameId}/ai/test`);
   return data;
 }
 

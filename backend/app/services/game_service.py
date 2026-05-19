@@ -53,6 +53,7 @@ class GameState:
     players: list[Player] = field(default_factory=list)
     game_status: GameStatus = GameStatus.waiting
     current_round: int = 1
+    current_speaker_id: str | None = None
     started: bool = False
     winner_faction: str | None = None
     chats: list[dict[str, object]] = field(default_factory=list)
@@ -62,6 +63,8 @@ class GameState:
     created_at: str = field(default_factory=utc_now_iso)
     ai_cycle_running: bool = False
     night_actions: list[dict[str, object]] = field(default_factory=list)
+    speak_order: list[str] = field(default_factory=list)
+    speak_turn_submitted: bool = False
     room_settings: RoomRuntimeSettings = field(default_factory=_default_room_settings)
 
 
@@ -109,6 +112,7 @@ def _snapshot(game: GameState, player_id: str, my_role: RoleType = RoleType.unkn
         player_id=player_id,
         game_status=game.game_status,
         current_round=game.current_round,
+        current_speaker_id=game.current_speaker_id,
         started=game.started,
         winner_faction=game.winner_faction,
         players=game.players,
@@ -116,6 +120,40 @@ def _snapshot(game: GameState, player_id: str, my_role: RoleType = RoleType.unkn
         night_action_required=night_action_required,
         room_settings=_room_settings_view(game.room_settings),
     )
+
+
+def _alive_speak_order(game: GameState) -> list[str]:
+    return [player.id for player in game.players if player.is_alive]
+
+
+def begin_speak_turn(game_id: str) -> str | None:
+    game = _get_game_or_raise(game_id)
+    game.speak_order = _alive_speak_order(game)
+    game.current_speaker_id = game.speak_order[0] if game.speak_order else None
+    game.speak_turn_submitted = False
+    return game.current_speaker_id
+
+
+def advance_speak_turn(game_id: str) -> str | None:
+    game = _get_game_or_raise(game_id)
+    if not game.speak_order:
+        game.current_speaker_id = None
+        game.speak_turn_submitted = False
+        return None
+
+    if game.current_speaker_id in game.speak_order:
+        next_index = game.speak_order.index(game.current_speaker_id) + 1
+    else:
+        next_index = 0
+
+    if next_index >= len(game.speak_order):
+        game.current_speaker_id = None
+        game.speak_turn_submitted = False
+        return None
+
+    game.current_speaker_id = game.speak_order[next_index]
+    game.speak_turn_submitted = False
+    return game.current_speaker_id
 
 
 def _assign_roles(players: Iterable[Player], preset: str = "six-player-dark") -> None:
@@ -241,6 +279,9 @@ def start_game(game_id: str) -> GameSnapshot:
     _assign_roles(game.players, game.room_settings.scene.preset)
     game.started = True
     game.game_status = GameStatus.night
+    game.current_speaker_id = None
+    game.speak_order.clear()
+    game.speak_turn_submitted = False
     game.announcements.append("游戏开始")
     return _snapshot(game, game.owner_player_id, RoleType.unknown)
 
@@ -255,11 +296,19 @@ def get_player_role(game_id: str, player_id: str) -> RoleType:
 
 def record_speak(game_id: str, player_id: str, content: str) -> None:
     game = _get_game_or_raise(game_id)
-    if game.game_status not in {GameStatus.speak, GameStatus.day}:
+    if game.game_status != GameStatus.speak:
         raise AppError("当前阶段不能发言", status_code=409)
     speaker = next((item for item in game.players if item.id == player_id), None)
     if speaker is None:
         raise AppError("玩家不存在", status_code=404)
+    if not speaker.is_alive:
+        raise AppError("玩家已死亡，无法发言", status_code=409)
+    if game.current_speaker_id is None:
+        raise AppError("当前没有发言轮次", status_code=409)
+    if game.current_speaker_id != speaker.id:
+        raise AppError("当前不是你的发言轮次", status_code=409)
+    if game.speak_turn_submitted:
+        raise AppError("本轮发言已提交", status_code=409)
     game.chats.append(
         {
             "id": f"chat-{len(game.chats) + 1}",
@@ -270,6 +319,7 @@ def record_speak(game_id: str, player_id: str, content: str) -> None:
             "isAI": speaker.is_ai,
         }
     )
+    game.speak_turn_submitted = True
     game.announcements.append("收到一条发言")
 
 
@@ -385,6 +435,10 @@ def resolve_night(game_id: str) -> dict[str, object]:
     for player in game.players:
         player.night_action_done = False
 
+    game.current_speaker_id = None
+    game.speak_order.clear()
+    game.speak_turn_submitted = False
+
     # --- Clear night_actions ---
     game.night_actions.clear()
 
@@ -410,6 +464,9 @@ def resolve_night(game_id: str) -> dict[str, object]:
 def resolve_vote_round(game_id: str) -> dict[str, object]:
     game = _get_game_or_raise(game_id)
     if not game.votes:
+        game.current_speaker_id = None
+        game.speak_order.clear()
+        game.speak_turn_submitted = False
         return {"eliminated": None, "winnerFaction": game.winner_faction}
 
     tally: dict[str, int] = {}
@@ -425,6 +482,9 @@ def resolve_vote_round(game_id: str) -> dict[str, object]:
 
     game.votes.clear()
     game.current_round += 1
+    game.current_speaker_id = None
+    game.speak_order.clear()
+    game.speak_turn_submitted = False
 
     alive_wolves = sum(1 for player in game.players if player.is_alive and player.role == RoleType.wolf)
     alive_others = sum(1 for player in game.players if player.is_alive and player.role != RoleType.wolf)

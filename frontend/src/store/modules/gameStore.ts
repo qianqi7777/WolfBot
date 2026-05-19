@@ -17,6 +17,7 @@ export interface GameState {
   gameId: string;
   gameStatus: GameStatus;
   currentRound: number;
+  currentSpeakerId: string | null;
   started: boolean;
   winnerFaction: string | null;
   myRole: RoleType;
@@ -84,6 +85,7 @@ export const useGameStore = defineStore('game', {
     gameId: '',
     gameStatus: 'waiting',
     currentRound: 1,
+    currentSpeakerId: null,
     started: false,
     winnerFaction: null,
     myRole: 'unknown',
@@ -117,6 +119,7 @@ export const useGameStore = defineStore('game', {
       this.players = snapshot.players;
       this.gameStatus = snapshot.gameStatus;
       this.currentRound = snapshot.currentRound;
+      this.currentSpeakerId = snapshot.currentSpeakerId ?? null;
       this.started = snapshot.started;
       this.winnerFaction = snapshot.winnerFaction;
       this.myRole = snapshot.myRole;
@@ -136,6 +139,7 @@ export const useGameStore = defineStore('game', {
       this.announceList = [];
       this.gameStatus = 'waiting';
       this.currentRound = 1;
+      this.currentSpeakerId = null;
       this.started = false;
       this.winnerFaction = null;
       this.result = null;
@@ -150,6 +154,9 @@ export const useGameStore = defineStore('game', {
     },
     setCurrentRound(round: number) {
       this.currentRound = round;
+    },
+    setCurrentSpeakerId(playerId: string | null) {
+      this.currentSpeakerId = playerId;
     },
     setNightActionRequired(flag: boolean) {
       this.nightActionRequired = flag;
@@ -187,6 +194,7 @@ export const useGameStore = defineStore('game', {
       this.result = result;
       this.winnerFaction = result.winnerFaction;
       this.currentRound = result.currentRound;
+      this.currentSpeakerId = null;
       this.players = result.players;
       this.announceList = result.announcements.map((content, index) => ({
         id: `result-${index}`,
@@ -200,6 +208,7 @@ export const useGameStore = defineStore('game', {
       this.gameId = '';
       this.gameStatus = 'waiting';
       this.currentRound = 1;
+      this.currentSpeakerId = null;
       this.started = false;
       this.winnerFaction = null;
       this.myRole = 'unknown';

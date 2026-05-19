@@ -46,12 +46,32 @@
           <el-form-item>
             <el-space>
               <el-button type="primary" :loading="settingsLoading" @click="saveSettings">保存设置</el-button>
+              <el-button :loading="testLoading" @click="testConnection">测试连通性</el-button>
               <el-button :disabled="settingsLoading" @click="resetSettings">重置当前配置</el-button>
               <el-tag :type="store.roomSettings.ai.hasApiKey ? 'success' : 'warning'">
                 {{ store.roomSettings.ai.hasApiKey ? '已配置 API Key' : '未配置 API Key' }}
               </el-tag>
+              <el-tag :type="settingsForm.ai.enableMock ? 'warning' : 'success'">
+                {{ settingsForm.ai.enableMock ? '当前为模拟模式' : '当前为真实接口模式' }}
+              </el-tag>
             </el-space>
           </el-form-item>
+          <el-alert
+            v-if="connectionResult"
+            :title="connectionResult.message"
+            :type="connectionResult.success ? 'success' : 'error'"
+            show-icon
+            :closable="false"
+            style="margin-top: 12px"
+          />
+          <el-alert
+            v-if="connectionResult?.success && settingsForm.ai.enableMock"
+            title="真实接口已连通，但当前仍启用模拟模式，对局不会调用该接口。"
+            type="warning"
+            show-icon
+            :closable="false"
+            style="margin-top: 12px"
+          />
         </el-form>
       </el-card>
       <player-list :players="store.players" />
@@ -75,19 +95,22 @@
 import { onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
+import { isAxiosError } from 'axios';
 
-import { getRoom, startGame, updateRoomSettings } from '@/api/gameApi';
+import { getRoom, startGame, testRoomAiConnection, updateRoomSettings } from '@/api/gameApi';
 import GameStatus from '@/components/game/GameStatus.vue';
 import PlayerList from '@/components/game/PlayerList.vue';
 import { useGameSocket } from '@/hooks/useGameSocket';
 import { useGameStore } from '@/store/modules/gameStore';
-import type { RoomSettingsForm, RoomSettings } from '@/types/game';
+import type { AiConnectionTestResult, RoomSettingsForm, RoomSettings } from '@/types/game';
 
 const props = defineProps<{ gameId: string }>();
 const store = useGameStore();
 const router = useRouter();
 const loading = ref(false);
 const settingsLoading = ref(false);
+const testLoading = ref(false);
+const connectionResult = ref<AiConnectionTestResult | null>(null);
 const { connect, disconnect, isConnected } = useGameSocket();
 
 function cloneSettings(settings: RoomSettings): RoomSettingsForm {
@@ -119,6 +142,14 @@ watch(
     Object.assign(settingsForm.ai, next.ai);
   },
   { immediate: true, deep: true },
+);
+
+watch(
+  settingsForm,
+  () => {
+    connectionResult.value = null;
+  },
+  { deep: true },
 );
 
 const goGame = async () => {
@@ -160,6 +191,23 @@ const saveSettings = async () => {
     ElMessage.error('保存设置失败');
   } finally {
     settingsLoading.value = false;
+  }
+};
+
+const testConnection = async () => {
+  testLoading.value = true;
+  try {
+    connectionResult.value = await testRoomAiConnection(props.gameId);
+    ElMessage.success('连通性测试成功');
+  } catch (error) {
+    connectionResult.value = null;
+    ElMessage.error(
+      isAxiosError(error)
+        ? String(error.response?.data?.detail ?? error.response?.data?.message ?? '连通性测试失败')
+        : '连通性测试失败',
+    );
+  } finally {
+    testLoading.value = false;
   }
 };
 

@@ -12,9 +12,10 @@ from app.domain.enums import GameStatus, MessageType, RoleType
 from app.schemas.socket import SocketMessage
 from app.services.game_service import (
     AiRuntimeConfig,
+    advance_speak_turn,
+    begin_speak_turn,
     clear_votes,
     get_game_state,
-    get_player_role,
     list_ai_players,
     list_alive_players,
     record_night_action,
@@ -79,6 +80,14 @@ async def _call_openai_compatible(
     if runtime.enable_mock or not runtime.base_url or not runtime.api_key:
         return None
 
+    return await _post_openai_compatible(runtime, messages, response_format)
+
+
+async def _post_openai_compatible(
+    runtime: AiRuntimeConfig,
+    messages: list[dict[str, str]],
+    response_format: dict[str, str] | None = None,
+) -> str:
     payload: dict[str, Any] = {
         "model": runtime.model,
         "messages": messages,
@@ -103,6 +112,38 @@ async def _call_openai_compatible(
         data = response.json()
 
     return data["choices"][0]["message"]["content"]
+
+
+async def test_ai_connection(game_id: str, runtime: AiRuntimeConfig | None = None) -> dict[str, object]:
+    runtime = runtime or _effective_ai_config(game_id)
+    if not runtime.base_url or not runtime.api_key:
+        raise AppError("请先配置 API Base URL 和 API Key", status_code=400)
+
+    messages = [
+        {
+            "role": "system",
+            "content": "你是在做连接测试，只返回一个简短的中文确认词，不要解释。",
+        },
+        {
+            "role": "user",
+            "content": "请回复：连通成功",
+        },
+    ]
+
+    try:
+        content = await _post_openai_compatible(runtime, messages)
+    except (httpx.HTTPError, KeyError, ValueError) as exc:
+        logger.exception("AI connection test failed for game %s", game_id)
+        raise AppError(f"AI 连通性测试失败：{exc}", status_code=502) from exc
+
+    message = content.strip().strip('"') if content else "连通成功"
+    return {
+        "success": True,
+        "message": message or "连通成功",
+        "baseUrl": runtime.base_url,
+        "model": runtime.model,
+        "enableMock": runtime.enable_mock,
+    }
 
 
 async def _generate_ai_speech(game_id: str, player_id: str) -> str:
@@ -355,44 +396,77 @@ async def run_ai_cycle(game_id: str) -> None:
 
             # === Speak Phase ===
             set_game_status(game_id, GameStatus.speak)
+            current_speaker_id = begin_speak_turn(game_id)
+            speak_turn_ids = get_game_state(game_id).speak_order or [player.id for player in get_game_state(game_id).players if player.is_alive]
             await manager.broadcast(
                 game_id,
                 SocketMessage(
                     type=MessageType.game_status,
                     timestamp=utc_now_iso(),
-                    payload={"status": GameStatus.speak.value, "currentRound": get_game_state(game_id).current_round},
+                    payload={
+                        "status": GameStatus.speak.value,
+                        "currentRound": get_game_state(game_id).current_round,
+                        "currentSpeakerId": current_speaker_id,
+                    },
                 ).model_dump_json(),
             )
+            for turn_index, speaker_id in enumerate(speak_turn_ids):
+                game = get_game_state(game_id)
+                if game.winner_faction is not None:
+                    break
 
-            # AI players speak
-            for ai_player in list_ai_players(game_id):
-                speech = await _generate_ai_speech(game_id, ai_player.id)
-                record_speak(game_id, ai_player.id, speech)
+                game.current_speaker_id = speaker_id
+                game.speak_turn_submitted = False
+                speaker = next((player for player in game.players if player.id == speaker_id), None)
+
                 await manager.broadcast(
                     game_id,
                     SocketMessage(
-                        type=MessageType.ai_speak,
+                        type=MessageType.speak_turn,
                         timestamp=utc_now_iso(),
                         payload={
-                            "content": speech,
-                            "playerId": ai_player.id,
-                            "playerName": ai_player.name,
-                            "isAI": True,
+                            "currentSpeakerId": speaker_id,
+                            "currentSpeakerName": speaker.name if speaker else "",
+                            "turnIndex": turn_index + 1,
+                            "turnCount": len(speak_turn_ids),
                         },
                     ).model_dump_json(),
                 )
-                await asyncio.sleep(0.3)
+                await manager.broadcast(
+                    game_id,
+                    SocketMessage(
+                        type=MessageType.announce,
+                        timestamp=utc_now_iso(),
+                        payload={"content": f"轮到 {speaker.name if speaker else '玩家'} 发言"},
+                    ).model_dump_json(),
+                )
 
-            # Wait for human speech
-            await manager.broadcast(
-                game_id,
-                SocketMessage(
-                    type=MessageType.announce,
-                    timestamp=utc_now_iso(),
-                    payload={"content": "请在规定时间内发言"},
-                ).model_dump_json(),
-            )
-            await asyncio.sleep(settings.ai_speak_window_seconds)
+                if speaker and speaker.is_ai:
+                    speech = await _generate_ai_speech(game_id, speaker.id)
+                    record_speak(game_id, speaker.id, speech)
+                    await manager.broadcast(
+                        game_id,
+                        SocketMessage(
+                            type=MessageType.ai_speak,
+                            timestamp=utc_now_iso(),
+                            payload={
+                                "content": speech,
+                                "playerId": speaker.id,
+                                "playerName": speaker.name,
+                                "isAI": True,
+                            },
+                        ).model_dump_json(),
+                    )
+                    await asyncio.sleep(0.2)
+                else:
+                    deadline = asyncio.get_running_loop().time() + settings.ai_speak_window_seconds
+                    while asyncio.get_running_loop().time() < deadline:
+                        current_game = get_game_state(game_id)
+                        if current_game.speak_turn_submitted:
+                            break
+                        await asyncio.sleep(0.25)
+
+                advance_speak_turn(game_id)
 
             # === Vote Phase ===
             set_game_status(game_id, GameStatus.vote)

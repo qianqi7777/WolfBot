@@ -65,6 +65,14 @@ class AiConfigView(BaseSchema):
     has_api_key: bool = Field(default=False, alias="hasApiKey")
 
 
+class AiConnectionTestResult(BaseSchema):
+    success: bool
+    message: str
+    base_url: str = Field(default="", alias="baseUrl")
+    model: str = Field(default="gpt-4o-mini", alias="model")
+    enable_mock: bool = Field(default=True, alias="enableMock")
+
+
 class RoomSettingsUpdate(BaseSchema):
     scene: SceneConfig
     ai: AiConfigInput
@@ -80,6 +88,7 @@ class GameSnapshot(BaseSchema):
     player_id: str
     game_status: GameStatus
     current_round: int = 1
+    current_speaker_id: str | None = Field(default=None, alias="currentSpeakerId")
     started: bool = False
     winner_faction: str | None = None
     players: list[Player]

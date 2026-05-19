@@ -36,6 +36,7 @@ async def join_game_route(game_id: str, payload: JoinGameRequest) -> GameSnapsho
             payload={
                 "gameId": snapshot.game_id,
                 "players": [player.model_dump(by_alias=True) for player in snapshot.players],
+                "currentSpeakerId": snapshot.current_speaker_id,
                 "roomSettings": snapshot.room_settings.model_dump(by_alias=True),
             },
         ).model_dump_json(),
@@ -57,7 +58,11 @@ async def start_game_route(game_id: str) -> GameSnapshot:
         SocketMessage(
             type=MessageType.game_status,
             timestamp=utc_now_iso(),
-            payload={"status": snapshot.game_status.value, "currentRound": snapshot.current_round},
+            payload={
+                "status": snapshot.game_status.value,
+                "currentRound": snapshot.current_round,
+                "currentSpeakerId": snapshot.current_speaker_id,
+            },
         ).model_dump_json(),
     )
     return snapshot
