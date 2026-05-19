@@ -1,0 +1,133 @@
+classDiagram
+    direction LR
+
+    class GameStatus {
+        <<enumeration>>
+        waiting
+        night
+        day
+        speak
+        vote
+        end
+    }
+
+    class RoleType {
+        <<enumeration>>
+        wolf
+        civilian
+        prophet
+        unknown
+    }
+
+    class MessageType {
+        <<enumeration>>
+        room_update
+        announce
+        ai_speak
+        player_speak
+        vote_result
+        game_status
+        role_info
+        player_update
+        game_over
+        night_action
+        night_result
+        error
+    }
+
+    class Player {
+        +str id
+        +str name
+        +RoleType role
+        +bool is_ai
+        +bool is_alive
+        +bool night_action_done
+    }
+
+    class GameState {
+        +str game_id
+        +list~Player~ players
+        +GameStatus game_status
+        +int current_round
+        +bool started
+        +str|None winner_faction
+        +list~dict~ chats
+        +list~dict~ votes
+        +list~dict~ night_actions
+        +list~str~ announcements
+        +str owner_player_id
+        +str created_at
+        +bool ai_cycle_running
+    }
+
+    class GameSnapshot {
+        +str game_id
+        +str player_id
+        +GameStatus game_status
+        +int current_round
+        +bool started
+        +str|None winner_faction
+        +list~Player~ players
+        +RoleType my_role
+        +bool night_action_required
+    }
+
+    class NightActionRequest {
+        +str player_id
+        +str target_id
+    }
+
+    class SpeakRequest {
+        +str content
+        +str player_id
+    }
+
+    class VoteRequest {
+        +str target_id
+        +str player_id
+    }
+
+    class GameService {
+        +create_game(player_name) GameSnapshot
+        +join_game(game_id, player_name) GameSnapshot
+        +get_game(game_id, requester_id) GameSnapshot
+        +start_game(game_id) GameSnapshot
+        +record_speak(game_id, player_id, content) void
+        +record_vote(game_id, voter_id, target_id) void
+        +record_night_action(game_id, player_id, target_id) void
+        +get_night_targets(game_id, player_id) list~Player~
+        +resolve_night(game_id) dict
+        +resolve_vote_round(game_id) dict
+        +_assign_roles(players) void
+        +_snapshot(game, player_id, my_role) GameSnapshot
+    }
+
+    class AiService {
+        +launch_ai_cycle(game_id) void
+        +run_ai_cycle(game_id) None
+        -_generate_ai_speech(game_id, player_id) str
+        -_generate_ai_vote(game_id, player_id) str
+        -_generate_ai_night_action(game_id, player_id) str
+        -_call_openai_compatible(messages) str|None
+    }
+
+    class VoteService {
+        +submit_vote(game_id, voter_id, target_id) void
+    }
+
+    class RoomService {
+        +create_room(player_name) GameSnapshot
+        +join_room(game_id, player_name) GameSnapshot
+        +get_room(game_id, requester_id) GameSnapshot
+        +start_room(game_id) GameSnapshot
+    }
+
+    GameService --> GameState : manages
+    GameService --> GameSnapshot : produces
+    GameService --> Player : manages
+    AiService --> GameService : uses
+    VoteService --> GameService : uses
+    RoomService --> GameService : delegates
+    GameState *-- Player : contains
+    GameSnapshot --> Player : references
+    NightActionRequest --> Player : targets

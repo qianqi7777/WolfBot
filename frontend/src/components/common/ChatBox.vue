@@ -8,21 +8,28 @@
         <small>{{ item.time }}</small>
       </div>
     </div>
-    <el-input v-model="draft" type="textarea" :rows="3" placeholder="输入发言" />
+    <el-input v-model="draft" type="textarea" :rows="3" placeholder="输入发言" :disabled="disabled" />
     <div class="actions">
-      <el-button type="primary" :disabled="!draft.trim()" @click="$emit('submit', draft)">发送</el-button>
+      <el-button type="primary" :disabled="disabled || !draft.trim()" @click="handleSend">发送</el-button>
     </div>
   </el-card>
 </template>
 
 <script setup lang="ts">
-defineProps<{
+const props = defineProps<{
   messages: Array<{ id: string; playerName: string; content: string; time: string }>;
+  disabled?: boolean;
 }>();
 
-defineEmits<{
+const emit = defineEmits<{
   submit: [content: string];
 }>();
 
 const draft = defineModel<string>('draft', { default: '' });
+
+const handleSend = () => {
+  if (props.disabled || !draft.value.trim()) return;
+  emit('submit', draft.value);
+  draft.value = '';
+};
 </script>

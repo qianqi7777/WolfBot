@@ -2,10 +2,20 @@ import { onBeforeUnmount, ref } from 'vue';
 
 import { buildGameSocketUrl } from '@/api/socketApi';
 import { useGameStore } from '@/store/modules/gameStore';
-import type { ChatMessage, GameResultPayload, GameStatus, Player, RoleType, SocketMessage, VoteData } from '@/types/game';
+import type {
+  ChatMessage,
+  GameResultPayload,
+  GameStatus,
+  NightResultPayload,
+  Player,
+  RoomSettings,
+  RoleType,
+  SocketMessage,
+  VoteData,
+} from '@/types/game';
 
 const GAME_STATUSES: GameStatus[] = ['waiting', 'night', 'day', 'speak', 'vote', 'end'];
-const ROLE_TYPES: RoleType[] = ['wolf', 'civilian', 'prophet', 'unknown'];
+const ROLE_TYPES: RoleType[] = ['wolf', 'civilian', 'prophet', 'guard', 'unknown'];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
@@ -31,6 +41,24 @@ function isPlayer(value: unknown): value is Player {
     isRoleType(value.role) &&
     isBoolean(value.isAI) &&
     isBoolean(value.isAlive)
+  );
+}
+
+function isRoomSettings(value: unknown): value is RoomSettings {
+  return (
+    isRecord(value) &&
+    isRecord(value.scene) &&
+    typeof value.scene.preset === 'string' &&
+    typeof value.scene.name === 'string' &&
+    typeof value.scene.description === 'string' &&
+    typeof value.scene.playerCount === 'number' &&
+    isRecord(value.ai) &&
+    typeof value.ai.baseUrl === 'string' &&
+    typeof value.ai.model === 'string' &&
+    typeof value.ai.timeoutSeconds === 'number' &&
+    typeof value.ai.temperature === 'number' &&
+    isBoolean(value.ai.enableMock) &&
+    isBoolean(value.ai.hasApiKey)
   );
 }
 
@@ -108,7 +136,7 @@ export function useGameSocket() {
     }
   };
 
-  const handleRoomUpdate = (message: SocketMessage<{ gameId?: string; players?: unknown[] }>) => {
+  const handleRoomUpdate = (message: SocketMessage<{ gameId?: string; players?: unknown[]; roomSettings?: unknown }>) => {
     if (!Array.isArray(message.payload?.players)) {
       return;
     }
@@ -117,12 +145,15 @@ export function useGameSocket() {
     if (players.length > 0) {
       store.players = players;
     }
+    if (isRecord(message.payload) && isRoomSettings(message.payload.roomSettings)) {
+      store.setRoomSettings(message.payload.roomSettings);
+    }
   };
 
   const handleSocketMessage = (message: SocketMessage) => {
     switch (message.type) {
       case 'room_update':
-        handleRoomUpdate(message as SocketMessage<{ gameId?: string; players?: unknown[] }>);
+        handleRoomUpdate(message as SocketMessage<{ gameId?: string; players?: unknown[]; roomSettings?: unknown }>);
         break;
       case 'announce':
         store.addAnnounce(String(message.payload?.content ?? ''));
@@ -130,6 +161,9 @@ export function useGameSocket() {
       case 'game_status':
         if (isGameStatus(message.payload?.status)) {
           store.setGameStatus(message.payload.status);
+          if (message.payload.status !== 'night') {
+            store.setNightActionRequired(false);
+          }
         }
         if (typeof message.payload?.currentRound === 'number') {
           store.setCurrentRound(message.payload.currentRound);
@@ -164,6 +198,54 @@ export function useGameSocket() {
         }
         if (typeof message.payload?.content === 'string') {
           store.addAnnounce(message.payload.content);
+        }
+        break;
+      case 'night_action':
+        if (isRecord(message.payload) && 'actionRequired' in message.payload) {
+          store.setNightActionRequired(!!message.payload.actionRequired);
+        }
+        break;
+      case 'night_result':
+        if (isRecord(message.payload)) {
+          let checkedPlayerId: string | null = null;
+          let checkedRole: RoleType | null = null;
+          // Backend sends checkedResults: [{playerId, targetId, isWolf}]
+          // Find the result for the current player
+          if (Array.isArray(message.payload.checkedResults)) {
+            const myResult = message.payload.checkedResults.find(
+              (r: unknown) => isRecord(r) && r.playerId === store.myId,
+            );
+            if (myResult && isRecord(myResult)) {
+              checkedPlayerId = typeof myResult.targetId === 'string' ? myResult.targetId : null;
+              if (myResult.isWolf === true) {
+                checkedRole = 'wolf';
+              } else if (isRoleType(myResult.checkedRole)) {
+                checkedRole = myResult.checkedRole;
+              } else {
+                checkedRole = 'civilian';
+              }
+            }
+          }
+          const result: NightResultPayload = {
+            killedPlayerId: typeof message.payload.killedPlayerId === 'string' ? message.payload.killedPlayerId : null,
+            guardedPlayerId: typeof message.payload.guardedPlayerId === 'string' ? message.payload.guardedPlayerId : null,
+            guardBlocked: typeof message.payload.guardBlocked === 'boolean' ? message.payload.guardBlocked : undefined,
+            checkedResults: Array.isArray(message.payload.checkedResults)
+              ? message.payload.checkedResults.filter(
+                  (r: unknown) =>
+                    isRecord(r) &&
+                    typeof r.playerId === 'string' &&
+                    typeof r.targetId === 'string' &&
+                    typeof r.isWolf === 'boolean',
+                )
+              : undefined,
+            checkedPlayerId,
+            checkedRole,
+          };
+          store.setNightResult(result);
+          if (result.killedPlayerId) {
+            store.updatePlayerStatus(result.killedPlayerId, false);
+          }
         }
         break;
       case 'game_over':

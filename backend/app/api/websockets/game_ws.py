@@ -5,7 +5,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from app.core.exceptions import AppError
 from app.domain.enums import MessageType
 from app.schemas.socket import SocketMessage
-from app.services.game_service import get_game, get_player_role, record_speak, record_vote, start_game
+from app.services.game_service import get_game, get_player_role, record_night_action, record_speak, record_vote, start_game
 from app.services.ai_service import launch_ai_cycle
 from app.utils.time import utc_now_iso
 from app.websocket.broadcaster import manager
@@ -19,13 +19,17 @@ async def game_ws(websocket: WebSocket) -> None:
     player_id = websocket.query_params.get("playerId", "")
     await manager.connect(game_id, websocket)
     try:
-        snapshot = get_game(game_id)
+        snapshot = get_game(game_id, requester_id=player_id or None)
         await manager.send_to(
             websocket,
             SocketMessage(
                 type=MessageType.room_update,
                 timestamp=utc_now_iso(),
-                payload={"gameId": snapshot.game_id, "players": [player.model_dump(by_alias=True) for player in snapshot.players]},
+                payload={
+                    "gameId": snapshot.game_id,
+                    "players": [player.model_dump(by_alias=True) for player in snapshot.players],
+                    "roomSettings": snapshot.room_settings.model_dump(by_alias=True),
+                },
             ).model_dump_json(),
         )
         await manager.send_to(
@@ -104,6 +108,24 @@ async def game_ws(websocket: WebSocket) -> None:
                             payload={"targetId": target_id, "voterId": player_id or snapshot.player_id},
                         ).model_dump_json(),
                     )
+            elif message_type == "night_action":
+                target_id = str(payload.get("targetId", "")).strip()
+                if target_id and (player_id or snapshot.player_id):
+                    try:
+                        record_night_action(game_id, player_id or snapshot.player_id, target_id)
+                        await manager.send_to(
+                            websocket,
+                            SocketMessage(
+                                type=MessageType.announce,
+                                timestamp=utc_now_iso(),
+                                payload={"content": "夜间行动已提交"},
+                            ).model_dump_json(),
+                        )
+                    except AppError as exc:
+                        await manager.send_to(
+                            websocket,
+                            SocketMessage(type=MessageType.error, timestamp=utc_now_iso(), payload={"content": exc.message}).model_dump_json(),
+                        )
             elif message_type == "ping":
                 await manager.send_to(
                     websocket,

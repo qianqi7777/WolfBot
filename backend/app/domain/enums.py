@@ -14,6 +14,7 @@ class RoleType(str, Enum):
     wolf = "wolf"
     civilian = "civilian"
     prophet = "prophet"
+    guard = "guard"
     unknown = "unknown"
 
 
@@ -27,4 +28,6 @@ class MessageType(str, Enum):
     role_info = "role_info"
     player_update = "player_update"
     game_over = "game_over"
+    night_action = "night_action"
+    night_result = "night_result"
     error = "error"

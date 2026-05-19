@@ -22,6 +22,7 @@ class Settings:
     ai_temperature: float = float(os.getenv("AI_TEMPERATURE", "0.7"))
     ai_enable_mock: bool = os.getenv("AI_ENABLE_MOCK", "true").lower() == "true"
     ai_vote_window_seconds: float = float(os.getenv("AI_VOTE_WINDOW_SECONDS", "5"))
+    ai_speak_window_seconds: int = int(os.getenv("AI_SPEAK_WINDOW_SECONDS", "8"))
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "cors_origins", _split_csv(os.getenv("CORS_ORIGINS", "http://localhost:5173")))

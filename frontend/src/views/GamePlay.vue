@@ -4,81 +4,85 @@
     <PlayerList :players="store.players" />
     <RoleCard :role="store.myRole" />
     <Announce :announcements="store.announceList" />
-    <ChatBox v-model:draft="speakDraft" :messages="store.chatList" @submit="submitSpeak" />
-    <VotePanel v-model:selected="selectedTargetId" :players="store.alivePlayers" @submit="submitVote" />
+    <ChatBox
+      :messages="store.chatList"
+      :disabled="!canPlayerSpeak(store.gameStatus, selfPlayer ?? undefined)"
+      @submit="submitSpeak"
+    />
+    <VotePanel
+      :players="store.alivePlayers"
+      :disabled="!canPlayerVote(store.gameStatus, selfPlayer ?? undefined)"
+      :current-player-id="store.myId"
+      @submit="submitVote"
+    />
+    <NightAction
+      v-if="showNightAction"
+      :role="store.myRole"
+      :players="store.alivePlayers"
+      :current-player-id="store.myId"
+      :night-result="store.nightResult"
+      @submit="submitNightActionHandler"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { ElMessage } from 'element-plus';
+import { computed, onMounted, onUnmounted, watch } from 'vue';
 import { useRouter } from 'vue-router';
 
-import { getGame, submitSpeak as apiSpeak, submitVote as apiVote } from '@/api/gameApi';
+import { submitSpeak as apiSpeak, submitVote as apiVote, submitNightAction as apiNightAction } from '@/api/gameApi';
 import Announce from '@/components/common/Announce.vue';
 import ChatBox from '@/components/common/ChatBox.vue';
-import RoleCard from '@/components/common/RoleCard.vue';
+import NightAction from '@/components/common/NightAction.vue';
 import VotePanel from '@/components/common/VotePanel.vue';
+import RoleCard from '@/components/common/RoleCard.vue';
 import GameStatus from '@/components/game/GameStatus.vue';
 import PlayerList from '@/components/game/PlayerList.vue';
 import { useGameLogic } from '@/hooks/useGameLogic';
 import { useGameSocket } from '@/hooks/useGameSocket';
 import { useGameStore } from '@/store/modules/gameStore';
-import type { Player } from '@/types/game';
 
-const props = defineProps<{ gameId: string }>();
 const store = useGameStore();
-const router = useRouter();
-const speakDraft = ref('');
-const selectedTargetId = ref('');
 const { connect, disconnect } = useGameSocket();
-const { canPlayerSpeak, canPlayerVote, isValidSpeak } = useGameLogic();
+const { canPlayerSpeak, canPlayerVote, canPlayerNightAction } = useGameLogic();
+const router = useRouter();
 
-const selfPlayer = computed<Player | null>(() => store.selfPlayer);
+const selfPlayer = computed(() => store.selfPlayer);
 
-const ensureGame = async () => {
-  if (store.gameId !== props.gameId) {
-    const snapshot = await getGame(props.gameId);
-    store.applySnapshot(snapshot, store.myId || snapshot.playerId);
-  }
-  connect(props.gameId, store.myId);
-};
+const showNightAction = computed(
+  () => canPlayerNightAction(store.gameStatus, store.myRole, selfPlayer.value ?? undefined) && store.nightActionRequired,
+);
 
 const submitSpeak = async (content: string) => {
-  if (!isValidSpeak(content)) {
-    ElMessage.warning('发言内容无效');
-    return;
-  }
-  if (!canPlayerSpeak(store.gameStatus, selfPlayer.value ?? undefined)) {
-    ElMessage.warning('当前阶段不能发言');
-    return;
-  }
   await apiSpeak(store.gameId, store.myId, content);
-  speakDraft.value = '';
 };
 
 const submitVote = async (targetId: string) => {
-  if (!canPlayerVote(store.gameStatus, selfPlayer.value ?? undefined)) {
-    ElMessage.warning('当前阶段不能投票');
-    return;
-  }
-  if (!targetId) {
-    ElMessage.warning('请选择投票目标');
-    return;
-  }
   await apiVote(store.gameId, store.myId, targetId);
-  selectedTargetId.value = '';
 };
 
-onMounted(ensureGame);
+const submitNightActionHandler = async (targetId: string) => {
+  await apiNightAction(store.gameId, store.myId, targetId);
+  store.setNightActionRequired(false);
+};
+
+onMounted(() => {
+  if (store.gameId && store.myId) {
+    connect(store.gameId, store.myId);
+  }
+});
+
 watch(
   () => store.gameStatus,
   (status) => {
     if (status === 'end') {
-      router.replace({ name: 'result', params: { gameId: props.gameId } });
+      router.replace({ name: 'result', params: { gameId: store.gameId } });
     }
   },
   { immediate: true },
 );
-onBeforeUnmount(disconnect);
+
+onUnmounted(() => {
+  disconnect();
+});
 </script>

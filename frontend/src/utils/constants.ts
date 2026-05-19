@@ -13,6 +13,7 @@ export const ROLE_LABELS: Record<RoleType, string> = {
   wolf: '狼人',
   civilian: '平民',
   prophet: '预言家',
+  guard: '守卫',
   unknown: '未知',
 };
 

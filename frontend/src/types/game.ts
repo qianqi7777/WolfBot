@@ -1,6 +1,38 @@
 export type GameStatus = 'waiting' | 'night' | 'day' | 'speak' | 'vote' | 'end';
 
-export type RoleType = 'wolf' | 'civilian' | 'prophet' | 'unknown';
+export type RoleType = 'wolf' | 'civilian' | 'prophet' | 'guard' | 'unknown';
+
+export type ScenePreset = 'six-player-dark';
+
+export interface SceneConfig {
+  preset: ScenePreset;
+  name: string;
+  description: string;
+  playerCount: number;
+}
+
+export interface AiConfigForm {
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  timeoutSeconds: number;
+  temperature: number;
+  enableMock: boolean;
+}
+
+export interface AiConfigView extends Omit<AiConfigForm, 'apiKey'> {
+  hasApiKey: boolean;
+}
+
+export interface RoomSettings {
+  scene: SceneConfig;
+  ai: AiConfigView;
+}
+
+export interface RoomSettingsForm {
+  scene: SceneConfig;
+  ai: AiConfigForm;
+}
 
 export interface Player {
   id: string;
@@ -8,6 +40,7 @@ export interface Player {
   role: RoleType;
   isAI: boolean;
   isAlive: boolean;
+  lastGuardTargetId?: string | null;
 }
 
 export interface ChatMessage {
@@ -39,6 +72,22 @@ export interface GameResultPayload {
   announcements: string[];
 }
 
+// 夜间行动请求载荷
+export interface NightActionPayload {
+  targetId: string;
+  actionType: 'kill' | 'check';
+}
+
+// 夜间结果载荷
+export interface NightResultPayload {
+  killedPlayerId: string | null;
+  guardedPlayerId?: string | null;
+  guardBlocked?: boolean;
+  checkedResults?: Array<{ playerId: string; targetId: string; isWolf: boolean }>;
+  checkedPlayerId: string | null;
+  checkedRole: RoleType | null;
+}
+
 export interface GameSnapshot {
   gameId: string;
   playerId: string;
@@ -48,6 +97,8 @@ export interface GameSnapshot {
   winnerFaction: string | null;
   players: Player[];
   myRole: RoleType;
+  nightActionRequired: boolean;
+  roomSettings: RoomSettings;
 }
 
 export interface SocketMessage<TPayload = Record<string, unknown>> {
@@ -61,6 +112,8 @@ export interface SocketMessage<TPayload = Record<string, unknown>> {
     | 'role_info'
     | 'player_update'
     | 'game_over'
+    | 'night_action'
+    | 'night_result'
     | 'error';
   payload?: TPayload;
   timestamp?: string;

@@ -29,7 +29,7 @@ router.beforeEach(async (to) => {
     if (!store.gameId || store.gameId !== gameId) {
       try {
         store.restoreSession();
-        store.applySnapshot(await getGame(gameId), store.myId || undefined);
+        store.applySnapshot(await getGame(gameId, store.myId || undefined), store.myId || undefined);
       } catch {
         return { name: 'home' };
       }

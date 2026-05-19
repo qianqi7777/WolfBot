@@ -14,3 +14,6 @@ venv/
 .mypy_cache/
 coverage/
 *.log
+
+# Workbuddy: 忽略工作区辅助目录
+.workbuddy/

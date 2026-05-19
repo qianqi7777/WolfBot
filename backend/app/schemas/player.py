@@ -10,3 +10,5 @@ class Player(BaseSchema):
     role: RoleType = RoleType.unknown
     is_ai: bool = Field(default=False, alias="isAI")
     is_alive: bool = True
+    night_action_done: bool = False
+    last_guard_target_id: str | None = Field(default=None, alias="lastGuardTargetId")

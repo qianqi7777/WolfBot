@@ -2,10 +2,12 @@ import { defineStore } from 'pinia';
 
 import type {
   AnnounceMessage,
+  RoomSettings,
   ChatMessage,
   GameResultPayload,
   GameSnapshot,
   GameStatus,
+  NightResultPayload,
   Player,
   RoleType,
   VoteData,
@@ -24,10 +26,32 @@ export interface GameState {
   voteList: VoteData[];
   announceList: AnnounceMessage[];
   result: GameResultPayload | null;
+  nightActionRequired: boolean;
+  nightResult: NightResultPayload | null;
+  roomSettings: RoomSettings;
 }
 
 const SESSION_GAME_ID_KEY = 'wolfbot.gameId';
 const SESSION_PLAYER_ID_KEY = 'wolfbot.playerId';
+
+function createDefaultRoomSettings(): RoomSettings {
+  return {
+    scene: {
+      preset: 'six-player-dark',
+      name: '6人暗牌场',
+      description: '2狼4好人，神职为预言家和守卫，暗牌局，无警长，节奏快。',
+      playerCount: 6,
+    },
+    ai: {
+      baseUrl: '',
+      model: 'gpt-4o-mini',
+      timeoutSeconds: 20,
+      temperature: 0.7,
+      enableMock: true,
+      hasApiKey: false,
+    },
+  };
+}
 
 function saveSession(gameId: string, playerId: string) {
   if (typeof localStorage === 'undefined') {
@@ -69,6 +93,9 @@ export const useGameStore = defineStore('game', {
     voteList: [],
     announceList: [],
     result: null,
+    nightActionRequired: false,
+    nightResult: null,
+    roomSettings: createDefaultRoomSettings(),
   }),
   getters: {
     alivePlayers: (state) => state.players.filter((player) => player.isAlive),
@@ -93,7 +120,12 @@ export const useGameStore = defineStore('game', {
       this.started = snapshot.started;
       this.winnerFaction = snapshot.winnerFaction;
       this.myRole = snapshot.myRole;
+      this.nightActionRequired = snapshot.nightActionRequired ?? false;
+      this.roomSettings = snapshot.roomSettings;
       saveSession(this.gameId, this.myId);
+    },
+    setRoomSettings(roomSettings: RoomSettings) {
+      this.roomSettings = roomSettings;
     },
     initGame(gameId: string, myId: string, players: Player[]) {
       this.gameId = gameId;
@@ -107,6 +139,7 @@ export const useGameStore = defineStore('game', {
       this.started = false;
       this.winnerFaction = null;
       this.result = null;
+      this.roomSettings = createDefaultRoomSettings();
       saveSession(this.gameId, this.myId);
     },
     setMyRole(role: RoleType) {
@@ -117,6 +150,19 @@ export const useGameStore = defineStore('game', {
     },
     setCurrentRound(round: number) {
       this.currentRound = round;
+    },
+    setNightActionRequired(flag: boolean) {
+      this.nightActionRequired = flag;
+    },
+    setNightResult(result: NightResultPayload) {
+      this.nightResult = result;
+    },
+    resetNightActions() {
+      this.nightActionRequired = false;
+      this.nightResult = null;
+    },
+    clearVotes() {
+      this.voteList = [];
     },
     addChatMessage(message: ChatMessage) {
       this.chatList.push(message);
@@ -163,6 +209,9 @@ export const useGameStore = defineStore('game', {
       this.voteList = [];
       this.announceList = [];
       this.result = null;
+      this.nightActionRequired = false;
+      this.nightResult = null;
+      this.roomSettings = createDefaultRoomSettings();
       clearSession();
     },
   },

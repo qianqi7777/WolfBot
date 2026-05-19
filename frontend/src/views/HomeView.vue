@@ -39,9 +39,7 @@ const playerName = ref('玩家');
 const loading = ref(false);
 
 const enterRoom = async (snapshot: Awaited<ReturnType<typeof createGame>>) => {
-  store.initGame(snapshot.gameId, snapshot.playerId, snapshot.players);
-  store.setMyRole(snapshot.myRole);
-  store.setGameStatus(snapshot.gameStatus);
+  store.applySnapshot(snapshot);
   await router.push({ name: 'room', params: { gameId: snapshot.gameId } });
 };
 

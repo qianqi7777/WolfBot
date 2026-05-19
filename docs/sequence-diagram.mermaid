@@ -1,0 +1,90 @@
+sequenceDiagram
+    participant Client as 前端
+    participant WS as WebSocket
+    participant AISvc as ai_service
+    participant GSvc as game_service
+    participant Bcast as broadcaster
+
+    Note over Client,Bcast: ===== 游戏开始 =====
+    Client->>WS: start
+    WS->>GSvc: start_game(game_id)
+    GSvc.>GSvc: _assign_roles(players) 动态分配
+    GSvc-->>GSvc: game_status = night
+    WS->>Client: role_info {role}
+    WS->>Bcast: game_status {status: night}
+
+    Note over Client,Bcast: ===== 夜间阶段 =====
+    AISvc->>GSvc: set_game_status(night)
+    AISvc->>Bcast: game_status {status: night, currentRound}
+
+    loop 每个AI狼人
+        AISvc->>AISvc: _generate_ai_night_action(game_id, ai_wolf_id)
+        AISvc->>GSvc: record_night_action(game_id, ai_wolf_id, target_id)
+    end
+
+    loop 每个AI预言家
+        AISvc->>AISvc: _generate_ai_night_action(game_id, ai_prophet_id)
+        AISvc->>GSvc: record_night_action(game_id, ai_prophet_id, target_id)
+    end
+
+    AISvc->>Bcast: night_action {actionRequired: true}
+    Note over Client: 人类玩家看到夜间行动面板
+
+    Client->>WS: night_action {targetId}
+    WS->>GSvc: record_night_action(game_id, player_id, target_id)
+
+    AISvc->>AISvc: await sleep(ai_speak_window_seconds)
+    AISvc->>GSvc: resolve_night(game_id)
+    GSvc.>GSvc: 处理夜间结果，标记死亡
+    AISvc->>Bcast: night_result {killedPlayerId, ...}
+    AISvc->>Bcast: player_update {playerId, isAlive: false}
+
+    alt 游戏结束检查
+        AISvc->>Bcast: game_over
+    end
+
+    Note over Client,Bcast: ===== 白天阶段 =====
+    AISvc->>GSvc: set_game_status(day)
+    AISvc->>Bcast: game_status {status: day, currentRound}
+
+    Note over Client,Bcast: ===== 发言阶段 =====
+    AISvc->>GSvc: set_game_status(speak)
+    AISvc->>Bcast: game_status {status: speak}
+
+    loop 每个AI玩家
+        AISvc->>AISvc: _generate_ai_speech(game_id, ai_player_id)
+        AISvc->>GSvc: record_speak(game_id, ai_player_id, speech)
+        AISvc->>Bcast: ai_speak {content, playerId, playerName}
+    end
+
+    Note over Client: 人类发言窗口开启
+    Client->>WS: speak {content}
+    WS->>GSvc: record_speak(game_id, player_id, content)
+    WS->>Bcast: player_speak {content, playerId, playerName}
+
+    AISvc->>AISvc: await sleep(ai_speak_window_seconds)
+
+    Note over Client,Bcast: ===== 投票阶段 =====
+    AISvc->>GSvc: set_game_status(vote)
+    AISvc->>Bcast: game_status {status: vote}
+
+    loop 每个AI玩家
+        AISvc->>AISvc: _generate_ai_vote(game_id, ai_player_id) 角色遮蔽
+        AISvc->>GSvc: record_vote(game_id, ai_player_id, target_id)
+        AISvc->>Bcast: vote_result {voterId, targetId}
+    end
+
+    Note over Client: 人类投票窗口开启
+    Client->>WS: vote {targetId}
+    WS->>GSvc: record_vote(game_id, player_id, target_id)
+    WS->>Bcast: vote_result {voterId, targetId}
+
+    AISvc->>AISvc: await sleep(ai_vote_window_seconds)
+    AISvc->>GSvc: resolve_vote_round(game_id)
+
+    alt 游戏结束
+        AISvc->>Bcast: game_over
+    else 继续下一轮
+        AISvc->>GSvc: clear_votes(game_id)
+        Note over AISvc: 回到夜间阶段
+    end

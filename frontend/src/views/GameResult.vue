@@ -49,8 +49,9 @@ const loadResult = async () => {
   store.setResult(result.value);
 };
 
-const goHome = async () => {
-  await router.push({ name: 'home' });
+const goHome = () => {
+  store.resetGame();
+  router.push({ name: 'home' });
 };
 
 onMounted(loadResult);
