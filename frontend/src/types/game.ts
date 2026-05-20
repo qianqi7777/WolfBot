@@ -46,6 +46,7 @@ export interface RoomSettingsForm {
 export interface Player {
   id: string;
   name: string;
+  seatNumber: number;
   role: RoleType;
   isAI: boolean;
   isAlive: boolean;
@@ -63,7 +64,14 @@ export interface ChatMessage {
 
 export interface VoteData {
   voterId: string;
+  voterSeat?: number;
   targetId: string;
+  targetSeat?: number;
+}
+
+export interface VoteSummaryPayload {
+  votes: VoteData[];
+  eliminated: string | null;
 }
 
 export interface AnnounceMessage {
@@ -125,6 +133,7 @@ export interface SocketMessage<TPayload = Record<string, unknown>> {
     | 'ai_speak'
     | 'player_speak'
     | 'vote_result'
+    | 'vote_summary'
     | 'game_status'
     | 'role_info'
     | 'player_update'

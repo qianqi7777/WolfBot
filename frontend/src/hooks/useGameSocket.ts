@@ -13,6 +13,7 @@ import type {
   RoleType,
   SocketMessage,
   VoteData,
+  VoteSummaryPayload,
 } from '@/types/game';
 
 const GAME_STATUSES: GameStatus[] = ['waiting', 'night', 'day', 'speak', 'vote', 'end'];
@@ -43,6 +44,7 @@ function isPlayer(value: unknown): value is Player {
     isRecord(value) &&
     typeof value.id === 'string' &&
     typeof value.name === 'string' &&
+    typeof value.seatNumber === 'number' &&
     isRoleType(value.role) &&
     isBoolean(value.isAI) &&
     isBoolean(value.isAlive)
@@ -269,9 +271,24 @@ export function useGameSocket() {
           store.addAnnounce(message.payload.content);
         }
         break;
+      case 'vote_summary':
+        if (isRecord(message.payload) && Array.isArray(message.payload.votes)) {
+          const votes = message.payload.votes.filter(
+            (v: unknown) => isRecord(v) && typeof v.voterId === 'string' && typeof v.targetId === 'string',
+          ) as VoteData[];
+          store.setVoteSummary({
+            votes,
+            eliminated: typeof message.payload.eliminated === 'string' ? message.payload.eliminated : null,
+          });
+        }
+        break;
       case 'night_action':
         if (isRecord(message.payload) && 'actionRequired' in message.payload) {
           store.setNightActionRequired(!!message.payload.actionRequired);
+        }
+        // 狼人队友信息
+        if (isRecord(message.payload) && Array.isArray(message.payload.teammates)) {
+          store.setWolfTeammates(message.payload.teammates.filter((t: unknown) => typeof t === 'string'));
         }
         break;
       case 'night_result':

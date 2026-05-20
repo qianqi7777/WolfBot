@@ -156,11 +156,31 @@ class Judge:
         # 通知真人玩家提交行动
         human_players = [p for p in alive_players if not p.is_ai]
         for human_p in human_players:
+<<<<<<< HEAD
+            payload = {
+                "actionRequired": True,
+                "role": role_type.value,
+                "hint": skill.human_hint,
+            }
+            # 狼人队友信息：真人狼人能看到同场存活的狼人队友
+            if skill.faction == "wolf":
+                teammates = [
+                    f"{t.seat_number}号" for t in game.players
+                    if SKILL_REGISTRY[t.role].faction == "wolf"
+                    and t.id != human_p.id
+                    and t.is_alive
+                ]
+                if teammates:
+                    payload["teammates"] = teammates
+                    payload["hint"] += f"\n你的狼人队友：{'、'.join(teammates)}"
+            await self._send_to_player(human_p.id, MessageType.night_action, payload)
+=======
             await self._send_to_player(human_p.id, MessageType.night_action, {
                 "actionRequired": True,
                 "role": role_type.value,
                 "hint": skill.human_hint,
             })
+>>>>>>> d0960c3afea4069bbb61c2a39010d4d7eeeb5f6b
 
     async def _announce_night_result(self, night_result: dict[str, Any]) -> bool:
         """公布夜晚结算结果。返回 True 表示游戏继续，False 表示结束。"""
@@ -174,7 +194,11 @@ class Judge:
             killed_player = next(
                 (p for p in self._game().players if p.id == killed_id), None
             )
+<<<<<<< HEAD
+            name = f"{killed_player.seat_number}号玩家" if killed_player else "某玩家"
+=======
             name = killed_player.name if killed_player else "某玩家"
+>>>>>>> d0960c3afea4069bbb61c2a39010d4d7eeeb5f6b
             await self._announce(f"昨夜，{name} 被杀害")
             await self._broadcast(MessageType.night_result, {
                 "killedPlayerId": killed_id,
@@ -215,10 +239,17 @@ class Judge:
             target_player = next(
                 (p for p in self._game().players if p.id == target_id), None
             )
+<<<<<<< HEAD
+            target_label = f"{target_player.seat_number}号" if target_player else "某玩家"
+            result_text = "狼人" if is_wolf else "好人"
+            await self._send_to_player(str(prophet_id), MessageType.announce, {
+                "content": f"法官告知：{target_label} 的身份是 {result_text}",
+=======
             target_name = target_player.name if target_player else "某玩家"
             result_text = "狼人" if is_wolf else "好人"
             await self._send_to_player(str(prophet_id), MessageType.announce, {
                 "content": f"法官告知：{target_name} 的身份是 {result_text}",
+>>>>>>> d0960c3afea4069bbb61c2a39010d4d7eeeb5f6b
             })
 
         # 检查胜负
@@ -290,7 +321,11 @@ class Judge:
                 "turnIndex": turn_index + 1,
                 "turnCount": len(speak_turn_ids),
             })
+<<<<<<< HEAD
+            await self._announce(f"轮到 {speaker.seat_number}号玩家 发言")
+=======
             await self._announce(f"轮到 {speaker.name if speaker else '玩家'} 发言")
+>>>>>>> d0960c3afea4069bbb61c2a39010d4d7eeeb5f6b
 
             if speaker and speaker.is_ai:
                 # AI 发言
@@ -356,12 +391,54 @@ class Judge:
         """公布投票结果。返回 True 继续，False 结束。"""
         eliminated_id = result.get("eliminated")
         winner_faction = result.get("winnerFaction")
+<<<<<<< HEAD
+        game = self._game()
+        seat_map = {p.id: p.seat_number for p in game.players}
+
+        # ── 广播投票明细（谁投了谁） ──
+        vote_detail = []
+        for v in game.votes:
+            voter_id = str(v.get("voterId", ""))
+            target_id = str(v.get("targetId", ""))
+            voter_seat = seat_map.get(voter_id)
+            target_seat = seat_map.get(target_id)
+            vote_detail.append({
+                "voterId": voter_id,
+                "voterSeat": voter_seat,
+                "targetId": target_id,
+                "targetSeat": target_seat,
+            })
+        await self._broadcast(MessageType.vote_summary, {
+            "votes": vote_detail,
+            "eliminated": eliminated_id,
+        })
+
+        # ── 统计被投票数 ──
+        tally: dict[str, int] = {}
+        for v in game.votes:
+            tid = str(v.get("targetId", ""))
+            tally[tid] = tally.get(tid, 0) + 1
+
+        # 公布票数统计
+        tally_lines = []
+        for tid, count in sorted(tally.items(), key=lambda x: -x[1]):
+            t_seat = seat_map.get(tid)
+            label = f"{t_seat}号玩家" if t_seat else "某玩家"
+            tally_lines.append(f"{label}：{count}票")
+        if tally_lines:
+            await self._announce("投票统计：" + "，".join(tally_lines))
+=======
+>>>>>>> d0960c3afea4069bbb61c2a39010d4d7eeeb5f6b
 
         if eliminated_id:
             eliminated = next(
                 (p for p in self._game().players if p.id == eliminated_id), None
             )
+<<<<<<< HEAD
+            name = f"{eliminated.seat_number}号玩家" if eliminated else "某玩家"
+=======
             name = eliminated.name if eliminated else "某玩家"
+>>>>>>> d0960c3afea4069bbb61c2a39010d4d7eeeb5f6b
             await self._announce(f"投票结果：{name} 被放逐")
             await self._broadcast(MessageType.player_update, {
                 "playerId": eliminated_id,
@@ -426,13 +503,33 @@ class Judge:
         eliminated_id = vote_result.get("eliminated")
         if eliminated_id:
             ep = next((p for p in game.players if p.id == eliminated_id), None)
+<<<<<<< HEAD
+            eliminated_name = f"{ep.seat_number}号" if ep else None
+=======
             eliminated_name = ep.name if ep else None
+>>>>>>> d0960c3afea4069bbb61c2a39010d4d7eeeb5f6b
 
         # 从 announcements 提取夜晚死亡信息
         night_killed = None
         guard_blocked = False
         for ann in game.announcements:
             if "被杀害" in ann:
+<<<<<<< HEAD
+                # 提取信息（公告已用座位号，如"3号玩家被杀害"）
+                night_killed = ann.replace("昨夜，", "").replace(" 被杀害", "").strip()
+            if "守卫成功守住" in ann:
+                guard_blocked = True
+
+        # 从 chats 取本轮发言（用座位号标识）
+        seat_map = {p.id: p.seat_number for p in game.players}
+        speeches = []
+        for chat in game.chats:
+            speaker_id = str(chat.get("playerId", ""))
+            seat = seat_map.get(speaker_id)
+            speaker_label = f"{seat}号" if seat else str(chat.get("playerName", "?"))
+            speeches.append({
+                "speaker": speaker_label,
+=======
                 # 提取名字
                 night_killed = ann.replace(" 在夜晚被杀害", "").strip()
             if "守卫成功守住" in ann:
@@ -443,6 +540,7 @@ class Judge:
         for chat in game.chats:
             speeches.append({
                 "speaker": str(chat.get("playerName", "?")),
+>>>>>>> d0960c3afea4069bbb61c2a39010d4d7eeeb5f6b
                 "content": str(chat.get("content", "")),
             })
 

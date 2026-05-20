@@ -4,13 +4,14 @@
       <!-- 狼人：选择击杀目标 -->
       <template v-if="role === 'wolf'">
         <p>请选择要击杀的目标：</p>
+        <p v-if="teammates.length" class="teammate-hint">你的狼人队友：{{ teammates.join('、') }}</p>
         <el-radio-group v-model="selectedTarget" :disabled="disabled">
           <el-radio
             v-for="player in targetPlayers"
             :key="player.id"
             :value="player.id"
           >
-            {{ player.name }}{{ player.isAI ? '（AI）' : '' }}
+            {{ player.seatNumber }}号{{ player.isAI ? '（AI）' : '' }}
           </el-radio>
         </el-radio-group>
         <el-button
@@ -32,7 +33,7 @@
             :key="player.id"
             :value="player.id"
           >
-            {{ player.name }}{{ player.isAI ? '（AI）' : '' }}
+            {{ player.seatNumber }}号{{ player.isAI ? '（AI）' : '' }}
           </el-radio>
         </el-radio-group>
         <el-button
@@ -46,7 +47,7 @@
         <!-- 查验结果显示 -->
         <div v-if="checkResult" class="check-result">
           <el-alert
-            :title="`${checkResult.playerName} 的身份是：${roleLabels[checkResult.role]}`"
+            :title="`${checkResult.seatLabel} 的身份是：${roleLabels[checkResult.role]}`"
             :type="checkResult.role === 'wolf' ? 'error' : 'success'"
             show-icon
           />
@@ -62,7 +63,7 @@
             :key="player.id"
             :value="player.id"
           >
-            {{ player.name }}{{ player.isAI ? '（AI）' : '' }}
+            {{ player.seatNumber }}号{{ player.isAI ? '（AI）' : '' }}
           </el-radio>
         </el-radio-group>
         <el-button
@@ -75,7 +76,7 @@
         </el-button>
         <div v-if="guardResult" class="check-result">
           <el-alert
-            :title="guardResult.guardBlocked ? `你守住了 ${guardResult.playerName}` : `你守护了 ${guardResult.playerName}`"
+            :title="guardResult.guardBlocked ? `你守住了 ${guardResult.seatLabel}` : `你守护了 ${guardResult.seatLabel}`"
             type="success"
             show-icon
           />
@@ -107,6 +108,7 @@ const props = defineProps<{
     guardedPlayerId?: string | null;
     guardBlocked?: boolean;
   } | null;
+  teammateSeats?: string[];
 }>();
 
 const emit = defineEmits<{
@@ -115,6 +117,9 @@ const emit = defineEmits<{
 
 const selectedTarget = ref('');
 const roleLabels = ROLE_LABELS;
+
+/** 狼人队友（从后端推送的 teammates 数据） */
+const teammates = computed(() => props.teammateSeats ?? []);
 
 /** 目标玩家：仅存活的玩家，默认排除自己 */
 const targetPlayers = computed(() =>
@@ -125,13 +130,13 @@ const targetPlayers = computed(() =>
 const checkResult = computed(() => {
   if (props.role !== 'prophet' || !props.nightResult?.checkedPlayerId) return null;
   const target = props.players.find((p) => p.id === props.nightResult!.checkedPlayerId);
-  return target ? { playerName: target.name, role: props.nightResult.checkedRole ?? 'unknown' } : null;
+  return target ? { seatLabel: `${target.seatNumber}号`, role: props.nightResult.checkedRole ?? 'unknown' } : null;
 });
 
 const guardResult = computed(() => {
   if (props.role !== 'guard' || !props.nightResult?.guardedPlayerId) return null;
   const target = props.players.find((p) => p.id === props.nightResult!.guardedPlayerId);
-  return target ? { playerName: target.name, guardBlocked: props.nightResult.guardBlocked ?? false } : null;
+  return target ? { seatLabel: `${target.seatNumber}号`, guardBlocked: props.nightResult.guardBlocked ?? false } : null;
 });
 
 const handleSubmit = () => {
@@ -145,6 +150,11 @@ const handleSubmit = () => {
 <style scoped>
 .night-action {
   margin-bottom: 16px;
+}
+.teammate-hint {
+  color: #e6a23c;
+  margin-bottom: 8px;
+  font-weight: bold;
 }
 .check-result {
   margin-top: 12px;

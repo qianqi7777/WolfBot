@@ -11,6 +11,10 @@ import type {
   Player,
   RoleType,
   VoteData,
+<<<<<<< HEAD
+  VoteSummaryPayload,
+=======
+>>>>>>> d0960c3afea4069bbb61c2a39010d4d7eeeb5f6b
   AiConfigForm,
 } from '@/types/game';
 
@@ -26,10 +30,12 @@ export interface GameState {
   players: Player[];
   chatList: ChatMessage[];
   voteList: VoteData[];
+  voteSummary: VoteSummaryPayload | null;
   announceList: AnnounceMessage[];
   result: GameResultPayload | null;
   nightActionRequired: boolean;
   nightResult: NightResultPayload | null;
+  wolfTeammates: string[];
   roomSettings: RoomSettings;
 }
 
@@ -129,10 +135,12 @@ export const useGameStore = defineStore('game', {
     players: [],
     chatList: [],
     voteList: [],
+    voteSummary: null,
     announceList: [],
     result: null,
     nightActionRequired: false,
     nightResult: null,
+    wolfTeammates: [],
     roomSettings: createDefaultRoomSettings(),
   }),
   getters: {
@@ -172,6 +180,7 @@ export const useGameStore = defineStore('game', {
       this.players = players;
       this.chatList = [];
       this.voteList = [];
+      this.voteSummary = null;
       this.announceList = [];
       this.gameStatus = 'waiting';
       this.currentRound = 1;
@@ -197,12 +206,16 @@ export const useGameStore = defineStore('game', {
     setNightActionRequired(flag: boolean) {
       this.nightActionRequired = flag;
     },
+    setWolfTeammates(teammates: string[]) {
+      this.wolfTeammates = teammates;
+    },
     setNightResult(result: NightResultPayload) {
       this.nightResult = result;
     },
     resetNightActions() {
       this.nightActionRequired = false;
       this.nightResult = null;
+      this.wolfTeammates = [];
     },
     clearVotes() {
       this.voteList = [];
@@ -212,6 +225,9 @@ export const useGameStore = defineStore('game', {
     },
     addVote(vote: VoteData) {
       this.voteList.push(vote);
+    },
+    setVoteSummary(summary: VoteSummaryPayload) {
+      this.voteSummary = summary;
     },
     addAnnounce(content: string) {
       this.announceList.push({
@@ -252,10 +268,12 @@ export const useGameStore = defineStore('game', {
       this.players = [];
       this.chatList = [];
       this.voteList = [];
+      this.voteSummary = null;
       this.announceList = [];
       this.result = null;
       this.nightActionRequired = false;
       this.nightResult = null;
+      this.wolfTeammates = [];
       this.roomSettings = createDefaultRoomSettings();
       clearSession();
     },

@@ -17,6 +17,7 @@ from app.services.game_service import (
     begin_speak_turn,
     clear_votes,
     get_game_state,
+    get_seat_map,
     list_ai_players,
     list_alive_players,
     record_night_action,
@@ -25,6 +26,7 @@ from app.services.game_service import (
     resolve_night,
     resolve_vote_round,
     set_game_status,
+    seat_label,
 )
 from app.utils.time import utc_now_iso
 from app.websocket.broadcaster import manager
@@ -237,24 +239,56 @@ async def _generate_ai_speech(game_id: str, player_id: str) -> str:
     store = memory_manager.get_or_create(game_id, player_id, player.name, player.role)
     update_structured_memory_from_game(store, game.players, game_id)
 
+<<<<<<< HEAD
+    # 把最近发言灌入滑动窗口（用座位号标识发言人）
+    seat_map = get_seat_map(game_id)
+    for chat in game.chats[-8:]:
+        speaker_id = str(chat.get("playerId", ""))
+        seat = seat_map.get(speaker_id)
+        speaker_label = f"{seat}号" if seat else str(chat.get("playerName", "?"))
+        store.record_speech(speaker_label, str(chat.get("content", "")))
+=======
     # 把最近发言灌入滑动窗口
     for chat in game.chats[-8:]:
         store.record_speech(str(chat.get("playerName", "?")), str(chat.get("content", "")))
+>>>>>>> d0960c3afea4069bbb61c2a39010d4d7eeeb5f6b
 
     # ── 构建游戏上下文（使用压缩记忆） ──
     phase_hint = _PHASE_HINT.get(game.game_status, "未知阶段")
 
+<<<<<<< HEAD
+    # 座位号映射
+    seat_map = get_seat_map(game_id)
+    my_seat = player.seat_number
+
+    # 同阵营队友信息（使用座位号标识）
+=======
     # 同阵营队友信息（使用注册表判断阵营）
+>>>>>>> d0960c3afea4069bbb61c2a39010d4d7eeeb5f6b
     teammate_info = ""
     player_skill = get_skill(player.role)
     if player_skill.faction == "wolf":
         teammates = [
+<<<<<<< HEAD
+            f"{p.seat_number}号" for p in game.players
+=======
             p.name for p in game.players
+>>>>>>> d0960c3afea4069bbb61c2a39010d4d7eeeb5f6b
             if SKILL_REGISTRY[p.role].faction == "wolf" and p.id != player_id and p.is_alive
         ]
         if teammates:
             teammate_info = f"\n你的狼人队友：{'、'.join(teammates)}（你们需要配合投票和击杀）"
 
+<<<<<<< HEAD
+    # ── 存活玩家名单（用座位号） ──
+    alive_list = []
+    for p in game.players:
+        if p.is_alive and p.id != player_id:
+            alive_list.append(f"{p.seat_number}号")
+    alive_info = f"\n其他存活玩家：{'、'.join(alive_list)}" if alive_list else ""
+
+=======
+>>>>>>> d0960c3afea4069bbb61c2a39010d4d7eeeb5f6b
     # 压缩后的上下文（替代原始发言记录）
     compressed_context = store.build_context(max_tokens=1500)
 
@@ -264,6 +298,10 @@ async def _generate_ai_speech(game_id: str, player_id: str) -> str:
             "content": (
                 "你是在玩狼人杀的AI玩家。请用一句自然的中文发言，不要加引号，不要输出JSON，"
                 "不要重复别人的话，不要暴露自己的AI身份。发言要像真人玩家一样有逻辑和情感。"
+<<<<<<< HEAD
+                "提到其他玩家时请用'X号'（如'3号玩家'、'5号'），不要使用内部ID或编号。"
+=======
+>>>>>>> d0960c3afea4069bbb61c2a39010d4d7eeeb5f6b
             ),
         },
         {
@@ -272,10 +310,18 @@ async def _generate_ai_speech(game_id: str, player_id: str) -> str:
                 f"{_role_hint(player.role)}\n"
                 f"当前阶段：{phase_hint}\n"
                 f"当前轮次：第{game.current_round}轮\n"
+<<<<<<< HEAD
+                f"你是{my_seat}号玩家\n"
+                f"{teammate_info}"
+                f"{alive_info}\n"
+                f"{compressed_context}\n"
+                "请给出你本轮的发言（只用说一句话，自然地参与讨论，提到别人用X号）。"
+=======
                 f"你的名字：{player.name}\n"
                 f"{teammate_info}\n"
                 f"{compressed_context}\n"
                 "请给出你本轮的发言（只用说一句话，自然地参与讨论）。"
+>>>>>>> d0960c3afea4069bbb61c2a39010d4d7eeeb5f6b
             ),
         },
     ]
@@ -306,8 +352,13 @@ async def _generate_ai_vote(game_id: str, player_id: str) -> str:
         else:
             candidate_role = "未知"
         candidates.append({
+<<<<<<< HEAD
+            "seatNumber": item.seat_number,
+            "name": f"{item.seat_number}号玩家",
+=======
             "id": item.id,
             "name": item.name,
+>>>>>>> d0960c3afea4069bbb61c2a39010d4d7eeeb5f6b
             "role": candidate_role,
             "isAlive": item.is_alive,
         })
@@ -325,7 +376,11 @@ async def _generate_ai_vote(game_id: str, player_id: str) -> str:
     teammate_vote_hint = ""
     if SKILL_REGISTRY[player.role].faction == "wolf":
         teammates = [
+<<<<<<< HEAD
+            f"{p.seat_number}号" for p in game.players
+=======
             p.name for p in game.players
+>>>>>>> d0960c3afea4069bbb61c2a39010d4d7eeeb5f6b
             if SKILL_REGISTRY[p.role].faction == "wolf" and p.id != player_id and p.is_alive
         ]
         if teammates:
@@ -334,28 +389,61 @@ async def _generate_ai_vote(game_id: str, player_id: str) -> str:
     messages = [
         {
             "role": "system",
+<<<<<<< HEAD
+            "content": (
+                "你是在玩狼人杀的AI玩家，现在处于投票阶段。"
+                "只输出一个你要投票的玩家座位号（数字），不要解释，不要输出JSON，不要加'号'字。"
+            ),
+=======
             "content": "你是在玩狼人杀的AI玩家，现在处于投票阶段。只输出一个要投票的玩家ID，不要解释，不要输出JSON。",
+>>>>>>> d0960c3afea4069bbb61c2a39010d4d7eeeb5f6b
         },
         {
             "role": "user",
             "content": (
                 f"你的身份：{_role_hint(player.role)}\n"
+<<<<<<< HEAD
+                f"你是{player.seat_number}号玩家\n"
+=======
+>>>>>>> d0960c3afea4069bbb61c2a39010d4d7eeeb5f6b
                 f"当前轮次：第{game.current_round}轮\n"
                 f"候选名单：{json.dumps(candidates, ensure_ascii=False)}\n"
                 f"{teammate_vote_hint}\n"
                 f"{compressed_context}\n"
+<<<<<<< HEAD
+                "请直接返回你要投票的玩家座位号（纯数字，如3）。"
+=======
                 "请直接返回你要投票的玩家ID。"
+>>>>>>> d0960c3afea4069bbb61c2a39010d4d7eeeb5f6b
             ),
         },
     ]
 
     content = await _call_openai_compatible(game_id, messages)
     if content:
+<<<<<<< HEAD
+        raw = content.strip().strip('"')
+        # 尝试提取数字
+        import re
+        m = re.search(r'\d+', raw)
+        if m:
+            target_seat = int(m.group())
+            # 根据座位号找到玩家ID
+            target_player = next(
+                (p for p in game.players if p.seat_number == target_seat and p.is_alive and p.id != player_id),
+                None,
+            )
+            if target_player:
+                logger.info("[AI] game=%s player=%s号 使用真实API投票→%s号", game_id, player.seat_number, target_seat)
+                return target_player.id
+        logger.warning("[AI] game=%s player=%s号 API返回无效投票'%s'，回退模拟", game_id, player.seat_number, raw)
+=======
         target_id = content.strip().strip('"')
         if any(candidate["id"] == target_id for candidate in candidates):
             logger.info("[AI] game=%s player=%s 使用真实API投票→%s", game_id, player.name, target_id)
             return target_id
         logger.warning("[AI] game=%s player=%s API返回无效投票ID=%s，回退模拟", game_id, player.name, target_id)
+>>>>>>> d0960c3afea4069bbb61c2a39010d4d7eeeb5f6b
     logger.info("[AI] game=%s player=%s 使用模拟投票", game_id, player.name)
     return _mock_vote_target(game_id, player_id)
 

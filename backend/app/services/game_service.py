@@ -111,6 +111,26 @@ def _build_ai_players(count: int) -> list[Player]:
     ]
 
 
+def _assign_seat_numbers(players: list[Player]) -> None:
+    """按列表顺序分配座位号（1~N），AI提示词和发言统一使用座位号"""
+    for i, p in enumerate(players, start=1):
+        p.seat_number = i
+
+
+def seat_label(player: Player) -> str:
+    """返回玩家显示标签：'{N}号玩家'（AI附加AI标记）"""
+    tag = f"{player.seat_number}号玩家"
+    if player.is_ai:
+        tag += "(AI)"
+    return tag
+
+
+def get_seat_map(game_id: str) -> dict[str, int]:
+    """返回 {player_id: seat_number} 映射"""
+    game = _get_game_or_raise(game_id)
+    return {p.id: p.seat_number for p in game.players}
+
+
 def _get_game_or_raise(game_id: str) -> GameState:
     game = _GAMES.get(game_id)
     if game is None:
@@ -149,6 +169,10 @@ def _snapshot(game: GameState, player_id: str, my_role: RoleType = RoleType.unkn
             safe_players.append(Player(
                 id=p.id,
                 name=p.name,
+<<<<<<< HEAD
+                seat_number=p.seat_number,
+=======
+>>>>>>> d0960c3afea4069bbb61c2a39010d4d7eeeb5f6b
                 role=RoleType.unknown,
                 is_ai=p.is_ai,
                 is_alive=p.is_alive,
@@ -340,6 +364,7 @@ def start_game(game_id: str) -> GameSnapshot:
         game.players.extend(_build_ai_players(target_players - len(game.players)))
 
     _assign_roles(game.players, game.room_settings.scene.preset)
+    _assign_seat_numbers(game.players)
     game.started = True
     game.game_status = GameStatus.night
     game.current_speaker_id = None
@@ -481,7 +506,7 @@ def resolve_night(game_id: str) -> dict[str, object]:
         killed_player = next((p for p in game.players if p.id == killed_player_id), None)
         if killed_player:
             killed_player.is_alive = False
-            game.announcements.append(f"{killed_player.name} 在夜晚被杀害")
+            game.announcements.append(f"{killed_player.seat_number}号玩家 在夜晚被杀害")
     elif blocked_by_guard:
         game.announcements.append("守卫成功守住了狼人袭击")
     elif guard_targets:

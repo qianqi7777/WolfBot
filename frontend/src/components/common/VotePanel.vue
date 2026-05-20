@@ -2,8 +2,8 @@
   <el-card shadow="never">
     <template #header>投票面板</template>
     <el-radio-group v-model="selected">
-      <el-radio-button v-for="player in votablePlayers" :key="player.id" :label="player.id">
-        {{ player.name }}
+      <el-radio-button v-for="player in votablePlayers" :key="player.id" :value="player.id">
+        {{ player.seatNumber }}号
       </el-radio-button>
     </el-radio-group>
     <div class="actions">
