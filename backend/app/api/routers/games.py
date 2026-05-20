@@ -121,7 +121,7 @@ async def vote_route(game_id: str, payload: VoteRequest) -> dict[str, str]:
 
 @router.post("/{game_id}/action/night")
 async def night_action_route(game_id: str, payload: NightActionRequest) -> dict[str, str]:
-    record_night_action(game_id, payload.player_id, payload.target_id)
+    record_night_action(game_id, payload.player_id, payload.target_id, payload.action_type)
     return {"status": "accepted"}
 
 

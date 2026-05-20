@@ -15,6 +15,13 @@ import type {
   AiConfigForm,
   WolfTargetUpdate,
   RoleSelectStartPayload,
+  SheriffElectStartPayload,
+  SheriffCampaignPayload,
+  SheriffSpeechTurnPayload,
+  SheriffVotePayload,
+  SheriffElectResultPayload,
+  SheriffTransferPayload,
+  WolfSelfDestructPayload,
   GameMode,
 } from '@/types/game';
 
@@ -47,6 +54,16 @@ export interface GameState {
   gameMode: GameMode;
   // 遗言相关
   isLastWords: boolean;
+  // 警长相关
+  sheriffId: string | null;
+  sheriffCandidateIds: string[];
+  sheriffElectStart: SheriffElectStartPayload | null;
+  sheriffSpeechTurn: SheriffSpeechTurnPayload | null;
+  sheriffVoteStart: SheriffVotePayload | null;
+  sheriffElectResult: SheriffElectResultPayload | null;
+  sheriffTransfer: SheriffTransferPayload | null;
+  // 狼人自爆相关
+  wolfSelfDestructed: WolfSelfDestructPayload | null;
 }
 
 const SESSION_GAME_ID_KEY = 'wolfbot.gameId';
@@ -161,6 +178,14 @@ export const useGameStore = defineStore('game', {
     mySelectedRole: null,
     gameMode: 'classic',
     isLastWords: false,
+    sheriffId: null,
+    sheriffCandidateIds: [],
+    sheriffElectStart: null,
+    sheriffSpeechTurn: null,
+    sheriffVoteStart: null,
+    sheriffElectResult: null,
+    sheriffTransfer: null,
+    wolfSelfDestructed: null,
   }),
   getters: {
     alivePlayers: (state) => state.players.filter((player) => player.isAlive),
@@ -190,8 +215,12 @@ export const useGameStore = defineStore('game', {
       this.nightActionRequired = snapshot.nightActionRequired ?? false;
       this.roomSettings = snapshot.roomSettings;
       if (snapshot.ownerPlayerId) this.ownerPlayerId = snapshot.ownerPlayerId;
-      if ((snapshot as Record<string, unknown>).gameMode) {
-        this.gameMode = (snapshot as Record<string, unknown>).gameMode as GameMode;
+      this.gameMode = (snapshot.gameMode as GameMode) ?? this.gameMode;
+      if (snapshot.sheriffId !== undefined) {
+        this.sheriffId = snapshot.sheriffId ?? null;
+      }
+      if (Array.isArray(snapshot.sheriffCandidateIds)) {
+        this.sheriffCandidateIds = snapshot.sheriffCandidateIds as string[];
       }
       saveSession(this.gameId, this.myId);
     },
@@ -267,7 +296,7 @@ export const useGameStore = defineStore('game', {
     setCurrentPhaseTimeout(timeout: number) {
       this.currentPhaseTimeout = timeout;
     },
-    setRoleSelectStart(payload: RoleSelectStartPayload) {
+    setRoleSelectStart(payload: RoleSelectStartPayload | null) {
       this.roleSelectStart = payload;
     },
     setMySelectedRole(role: string | null) {
@@ -279,6 +308,47 @@ export const useGameStore = defineStore('game', {
     setIsLastWords(flag: boolean) {
       this.isLastWords = flag;
     },
+    // 警长相关 actions
+    setSheriffId(sheriffId: string | null) {
+      this.sheriffId = sheriffId;
+      // 更新玩家列表中的 isSheriff 标记
+      for (const p of this.players) {
+        p.isSheriff = p.id === sheriffId;
+      }
+    },
+    setSheriffCandidateIds(ids: string[]) {
+      this.sheriffCandidateIds = ids;
+    },
+    setSheriffElectStart(payload: SheriffElectStartPayload) {
+      this.sheriffElectStart = payload;
+    },
+    setSheriffSpeechTurn(payload: SheriffSpeechTurnPayload) {
+      this.sheriffSpeechTurn = payload;
+    },
+    setSheriffVoteStart(payload: SheriffVotePayload) {
+      this.sheriffVoteStart = payload;
+    },
+    setSheriffElectResult(payload: SheriffElectResultPayload) {
+      this.sheriffElectResult = payload;
+    },
+    setSheriffTransfer(payload: SheriffTransferPayload) {
+      this.sheriffTransfer = payload;
+    },
+    clearSheriffElection() {
+      this.sheriffElectStart = null;
+      this.sheriffSpeechTurn = null;
+      this.sheriffVoteStart = null;
+      this.sheriffElectResult = null;
+      this.sheriffTransfer = null;
+      this.sheriffCandidateIds = [];
+    },
+    // 狼人自爆 actions
+    setWolfSelfDestructed(payload: WolfSelfDestructPayload) {
+      this.wolfSelfDestructed = payload;
+    },
+    clearWolfSelfDestructed() {
+      this.wolfSelfDestructed = null;
+    },
     addAnnounce(content: string) {
       this.announceList.push({
         id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
@@ -286,10 +356,13 @@ export const useGameStore = defineStore('game', {
         time: new Date().toISOString(),
       });
     },
-    updatePlayerStatus(playerId: string, isAlive: boolean) {
+    updatePlayerStatus(playerId: string, isAlive: boolean, isSheriff?: boolean) {
       const player = this.players.find((item) => item.id === playerId);
       if (player) {
         player.isAlive = isAlive;
+        if (isSheriff !== undefined) {
+          player.isSheriff = isSheriff;
+        }
       }
     },
     setResult(result: GameResultPayload) {
@@ -333,6 +406,14 @@ export const useGameStore = defineStore('game', {
       this.mySelectedRole = null;
       this.gameMode = 'classic';
       this.isLastWords = false;
+      this.sheriffId = null;
+      this.sheriffCandidateIds = [];
+      this.sheriffElectStart = null;
+      this.sheriffSpeechTurn = null;
+      this.sheriffVoteStart = null;
+      this.sheriffElectResult = null;
+      this.sheriffTransfer = null;
+      this.wolfSelfDestructed = null;
       clearSession();
     },
   },

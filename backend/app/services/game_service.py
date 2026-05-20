@@ -110,9 +110,33 @@ class GameState:
     game_mode: str = "classic"  # 游戏模式：classic / role_select
     # 每轮事件记录（用于贡献率计算）
     round_events: list[dict[str, object]] = field(default_factory=list)
+    # 警长相关
+    sheriff_id: str | None = None  # 当前警长玩家 ID
+    sheriff_candidate_ids: list[str] = field(default_factory=list)  # 竞选候选人列表
+    sheriff_votes: list[dict[str, object]] = field(default_factory=list)  # 警长竞选投票
+    sheriff_campaign_submitted: bool = False  # 竞选发言已提交标记
+    # 狼人自爆相关
+    wolf_self_destructed: str | None = None  # 自爆狼人玩家 ID（None 表示无自爆）
+    # 猎人开枪相关
+    pending_hunter_shoot: str | None = None  # 待开枪的猎人玩家 ID
+    hunter_killed_by_poison: bool = False  # 猎人是否被毒杀（毒杀不能开枪）
+    # 房间码
+    room_code: str = ""  # 6位房间码，用于联机
 
 
 _GAMES: Dict[str, GameState] = {}
+_ROOM_CODE_MAP: Dict[str, str] = {}  # room_code → game_id
+
+
+def _generate_room_code() -> str:
+    """生成6位数字房间码，确保唯一"""
+    import random as _random
+    for _ in range(100):
+        code = ''.join(str(_random.randint(0, 9)) for _ in range(6))
+        if code not in _ROOM_CODE_MAP:
+            return code
+    # 极端情况：生成8位
+    return ''.join(str(_random.randint(0, 9)) for _ in range(8))
 
 
 def _build_ai_players(count: int) -> list[Player]:
@@ -138,6 +162,18 @@ def _assign_seat_numbers(players: list[Player]) -> None:
 def seat_label(player: Player) -> str:
     """返回玩家显示标签：'{N}号({name})'"""
     return f"{player.seat_number}号({player.name})"
+
+
+def _validate_seats(game: "GameState", max_seats: int) -> None:
+    """验证座位号：唯一性、边界（1~max_seats）、无缺失"""
+    seats = [p.seat_number for p in game.players]
+    # 检查边界
+    for s in seats:
+        if s < 1 or s > max_seats:
+            raise AppError(f"座位号 {s} 超出范围 1~{max_seats}", status_code=409)
+    # 检查唯一性
+    if len(seats) != len(set(seats)):
+        raise AppError("存在重复座位号，请重新分配", status_code=409)
 
 
 def get_seat_map(game_id: str) -> dict[str, int]:
@@ -172,13 +208,20 @@ def _snapshot(game: GameState, player_id: str, my_role: RoleType = RoleType.unkn
     night_action_required = False
     if game.game_status == GameStatus.night:
         current_player = next((p for p in game.players if p.id == player_id), None)
-        if current_player and current_player.is_alive and not current_player.night_action_done:
+        if current_player and current_player.is_alive and not current_player.night_action_done and not current_player.is_spectator:
             night_action_required = True
 
-    # 隐藏其他玩家的角色信息：只有自己能看到自己的角色
+    # 判断是否为观战者
+    current_player = next((p for p in game.players if p.id == player_id), None)
+    is_spectator = current_player.is_spectator if current_player else False
+
+    # 隐藏其他玩家的角色信息：只有自己能看到自己的角色，观战者/游戏结束后看到所有
     safe_players = []
     for p in game.players:
-        if p.id == player_id:
+        if p.is_spectator:
+            # 观战者自己不显示在玩家列表中
+            continue
+        if p.id == player_id or is_spectator or game.game_status == GameStatus.end:
             safe_players.append(p)
         else:
             safe_players.append(Player(
@@ -191,6 +234,10 @@ def _snapshot(game: GameState, player_id: str, my_role: RoleType = RoleType.unkn
                 night_action_done=p.night_action_done,
                 last_guard_target_id=p.last_guard_target_id,
                 vote_immunity_used=p.vote_immunity_used,
+                is_sheriff=p.is_sheriff,
+                antidote_used=p.antidote_used,
+                poison_used=p.poison_used,
+                is_spectator=False,
             ))
 
     return GameSnapshot(
@@ -207,6 +254,10 @@ def _snapshot(game: GameState, player_id: str, my_role: RoleType = RoleType.unkn
         room_settings=_room_settings_view(game.room_settings),
         owner_player_id=game.owner_player_id,
         game_mode=game.game_mode,
+        sheriff_id=game.sheriff_id,
+        sheriff_candidate_ids=game.sheriff_candidate_ids,
+        room_code=game.room_code,
+        is_spectator=is_spectator,
     )
 
 
@@ -287,7 +338,11 @@ def create_game(player_name: str) -> GameSnapshot:
     game_id = generate_game_id()
     owner_player_id = generate_player_id()
     players = [Player(id=owner_player_id, name=player_name, seat_number=1, role=RoleType.unknown)]
-    _GAMES[game_id] = GameState(game_id=game_id, players=players, owner_player_id=owner_player_id)
+    room_code = _generate_room_code()
+    _GAMES[game_id] = GameState(
+        game_id=game_id, players=players, owner_player_id=owner_player_id, room_code=room_code,
+    )
+    _ROOM_CODE_MAP[room_code] = game_id
     return _snapshot(_GAMES[game_id], owner_player_id)
 
 
@@ -343,6 +398,31 @@ def change_seat(game_id: str, player_id: str, seat_number: int) -> GameSnapshot:
     return _snapshot(game, player_id)
 
 
+def find_game_by_room_code(room_code: str) -> str | None:
+    """通过房间码查找游戏ID"""
+    return _ROOM_CODE_MAP.get(room_code.strip())
+
+
+def join_as_spectator(game_id: str, player_name: str) -> GameSnapshot:
+    """以观战者身份加入游戏（游戏已开始后也可加入）"""
+    game = _get_game_or_raise(game_id)
+    if not game.started:
+        raise AppError("游戏尚未开始，请以玩家身份加入", status_code=409)
+
+    player_id = generate_player_id()
+    spectator = Player(
+        id=player_id,
+        name=player_name,
+        seat_number=0,  # 观战者无座位
+        role=RoleType.unknown,
+        is_ai=False,
+        is_alive=False,
+        is_spectator=True,
+    )
+    game.players.append(spectator)
+    game.announcements.append(f"{player_name} 进入观战")
+    # 观战者看到所有角色
+    return _snapshot(game, player_id, RoleType.unknown)
 def set_deadline(game_id: str, timeout_seconds: float) -> str:
     """为当前计时阶段设置截止时间。返回 ISO 8601 UTC 时间戳。"""
     from datetime import datetime, timezone, timedelta
@@ -399,7 +479,63 @@ def get_game_state(game_id: str) -> GameState:
     return _get_game_or_raise(game_id)
 
 
+# ─── 状态机校验 ──────────────────────────────────────────────────────────────
+
+# 允许的状态转换映射：{from_status: [to_status]}
+VALID_TRANSITIONS: dict[GameStatus, set[GameStatus]] = {
+    GameStatus.waiting: {GameStatus.role_select, GameStatus.night, GameStatus.end},
+    GameStatus.role_select: {GameStatus.night, GameStatus.end},
+    GameStatus.night: {GameStatus.day, GameStatus.night, GameStatus.end},
+    GameStatus.day: {GameStatus.sheriff_election, GameStatus.speak, GameStatus.end},
+    GameStatus.sheriff_election: {GameStatus.speak, GameStatus.day, GameStatus.end},
+    GameStatus.speak: {GameStatus.vote, GameStatus.night, GameStatus.end},
+    GameStatus.vote: {GameStatus.night, GameStatus.end},
+    GameStatus.end: set(),  # 终态不可转换
+}
+
+# 各状态允许的操作
+VALID_ACTIONS: dict[GameStatus, set[str]] = {
+    GameStatus.waiting: {"speak", "change_seat", "start", "join"},
+    GameStatus.role_select: {"role_select_choice"},
+    GameStatus.night: {"night_action", "last_words", "wolf_self_destruct"},
+    GameStatus.day: {"last_words", "wolf_self_destruct"},
+    GameStatus.sheriff_election: {"sheriff_campaign", "sheriff_vote", "speak", "last_words", "wolf_self_destruct"},
+    GameStatus.speak: {"speak", "last_words", "wolf_self_destruct"},
+    GameStatus.vote: {"vote", "wolf_self_destruct"},
+    GameStatus.end: set(),
+}
+
+
+def validate_state_transition(game_id: str, new_status: GameStatus) -> None:
+    """校验状态转换是否合法。同状态设置视为无操作，直接通过。"""
+    game = _get_game_or_raise(game_id)
+    current = game.game_status
+    if current == new_status:
+        return  # 同状态无操作，合法
+    allowed = VALID_TRANSITIONS.get(current, set())
+    if new_status not in allowed:
+        raise AppError(
+            f"非法状态转换: {current.value} → {new_status.value}",
+            status_code=409,
+        )
+
+
+def validate_action(game_id: str, action: str) -> None:
+    """校验当前状态是否允许该操作"""
+    game = _get_game_or_raise(game_id)
+    current = game.game_status
+    allowed = VALID_ACTIONS.get(current, set())
+    if action not in allowed:
+        raise AppError(
+            f"当前状态({current.value})不允许执行操作: {action}",
+            status_code=409,
+        )
+
+
+# ────────────────────────────────────────────────────────────────────────────
+
 def set_game_status(game_id: str, status: GameStatus) -> GameSnapshot:
+    validate_state_transition(game_id, status)
     game = _get_game_or_raise(game_id)
     game.game_status = status
     return _snapshot(game, game.owner_player_id)
@@ -466,6 +602,8 @@ def start_game(game_id: str, requester_id: str | None = None) -> GameSnapshot:
         game.announcements.append("游戏开始")
 
     _assign_seat_numbers(game.players)
+    # 验证座位号唯一性和边界
+    _validate_seats(game, target_players)
     return _snapshot(game, game.owner_player_id, RoleType.unknown)
 
 
@@ -479,7 +617,7 @@ def get_player_role(game_id: str, player_id: str) -> RoleType:
 
 def record_speak(game_id: str, player_id: str, content: str) -> None:
     game = _get_game_or_raise(game_id)
-    if game.game_status not in (GameStatus.speak, GameStatus.day):
+    if game.game_status not in (GameStatus.speak, GameStatus.day, GameStatus.sheriff_election):
         raise AppError("当前阶段不能发言", status_code=409)
     speaker = next((item for item in game.players if item.id == player_id), None)
     if speaker is None:
@@ -502,7 +640,11 @@ def record_speak(game_id: str, player_id: str, content: str) -> None:
             "isAI": speaker.is_ai,
         }
     )
-    game.speak_turn_submitted = True
+    # 警长竞选发言用 sheriff_campaign_submitted 标记
+    if game.game_status == GameStatus.sheriff_election:
+        game.sheriff_campaign_submitted = True
+    else:
+        game.speak_turn_submitted = True
     game.announcements.append("收到一条发言")
 
 
@@ -560,8 +702,10 @@ def record_vote(game_id: str, voter_id: str, target_id: str) -> None:
     game.announcements.append("收到一票" if not is_abstain else "收到一票弃票")
 
 
-def record_night_action(game_id: str, player_id: str, target_id: str) -> None:
-    """Record a night action (wolf kill or prophet check) for a player."""
+def record_night_action(game_id: str, player_id: str, target_id: str, action_type: str = "") -> None:
+    """Record a night action for a player.
+    action_type: optional, used for witch (\"save\"/\"poison\") to distinguish potion type.
+    """
     game = _get_game_or_raise(game_id)
     if game.game_status != GameStatus.night:
         raise AppError("当前不是夜间阶段", status_code=409)
@@ -583,8 +727,22 @@ def record_night_action(game_id: str, player_id: str, target_id: str) -> None:
     if not SKILL_REGISTRY[player.role].consecutive_target_allowed and player.last_guard_target_id == target_id:
         raise AppError(f"{SKILL_REGISTRY[player.role].name}不能连续两晚选择同一目标", status_code=409)
 
+    # 女巫特殊校验：药剂各只能用一次
+    if player.role == RoleType.witch:
+        if action_type == "save" and player.antidote_used:
+            raise AppError("解药已经使用过", status_code=409)
+        if action_type == "poison" and player.poison_used:
+            raise AppError("毒药已经使用过", status_code=409)
+        if action_type not in ("save", "poison"):
+            raise AppError("女巫必须选择使用解药(save)或毒药(poison)", status_code=400)
+
     game.night_actions = [action for action in game.night_actions if action.get("playerId") != player_id]
-    game.night_actions.append({"playerId": player_id, "targetId": target_id, "role": player.role.value})
+    game.night_actions.append({
+        "playerId": player_id,
+        "targetId": target_id,
+        "role": player.role.value,
+        "actionType": action_type,
+    })
     player.night_action_done = True
 
 
@@ -608,11 +766,21 @@ def resolve_night(game_id: str) -> dict[str, object]:
     # --- Wolf kill: majority vote among wolves ---
     wolf_targets: list[str] = []
     guard_targets: list[str] = []
+    witch_save_targets: list[str] = []
+    witch_poison_targets: list[str] = []
     for action in game.night_actions:
-        if action.get("role") == RoleType.wolf.value:
-            wolf_targets.append(str(action.get("targetId", "")))
-        if action.get("role") == RoleType.guard.value:
-            guard_targets.append(str(action.get("targetId", "")))
+        role_val = str(action.get("role", ""))
+        target_id = str(action.get("targetId", ""))
+        action_type = str(action.get("actionType", ""))
+        if role_val == RoleType.wolf.value:
+            wolf_targets.append(target_id)
+        elif role_val == RoleType.guard.value:
+            guard_targets.append(target_id)
+        elif role_val == RoleType.witch.value:
+            if action_type == "save":
+                witch_save_targets.append(target_id)
+            elif action_type == "poison":
+                witch_poison_targets.append(target_id)
 
     killed_player_id: str | None = None
     if wolf_targets:
@@ -625,6 +793,47 @@ def resolve_night(game_id: str) -> dict[str, object]:
     blocked_by_guard = bool(killed_player_id and guarded_player_id and killed_player_id == guarded_player_id)
     if blocked_by_guard:
         killed_player_id = None
+
+    # --- Witch antidote: save the killed player ---
+    witch_saved = False
+    witch_saved_player_id: str | None = None
+    if killed_player_id and witch_save_targets:
+        # 女巫解药可以救活被狼杀的玩家
+        for save_target in witch_save_targets:
+            if save_target == killed_player_id:
+                witch_saved = True
+                witch_saved_player_id = killed_player_id
+                killed_player_id = None
+                # 标记女巫解药已使用
+                for action in game.night_actions:
+                    if str(action.get("role", "")) == RoleType.witch.value and str(action.get("actionType", "")) == "save":
+                        witch_player = next((p for p in game.players if p.id == str(action.get("playerId", ""))), None)
+                        if witch_player:
+                            witch_player.antidote_used = True
+                break
+
+    # --- Witch poison: kill the poisoned target (毒药不受守卫保护) ---
+    witch_poisoned_player_id: str | None = None
+    if witch_poison_targets:
+        poison_target = witch_poison_targets[0]  # 取第一个毒杀目标
+        poison_target_player = next((p for p in game.players if p.id == poison_target), None)
+        if poison_target_player and poison_target_player.is_alive:
+            # 不能毒杀已被狼人杀死的人（如果被守卫守住或被女巫救活则可以被毒）
+            if poison_target != killed_player_id or killed_player_id is None:
+                witch_poisoned_player_id = poison_target
+            # 标记女巫毒药已使用
+            for action in game.night_actions:
+                if str(action.get("role", "")) == RoleType.witch.value and str(action.get("actionType", "")) == "poison":
+                    witch_player = next((p for p in game.players if p.id == str(action.get("playerId", ""))), None)
+                    if witch_player:
+                        witch_player.poison_used = True
+
+    # 合并死亡：狼杀 + 毒杀（两者可能不同）
+    all_killed_ids = set()
+    if killed_player_id:
+        all_killed_ids.add(killed_player_id)
+    if witch_poisoned_player_id:
+        all_killed_ids.add(witch_poisoned_player_id)
 
     # --- Prophet check: return check results ---
     checked_results: list[dict[str, object]] = []
@@ -640,23 +849,38 @@ def resolve_night(game_id: str) -> dict[str, object]:
                     "isWolf": is_wolf,
                 })
 
-    # --- Mark killed player as dead ---
-    if killed_player_id:
-        killed_player = next((p for p in game.players if p.id == killed_player_id), None)
-        if killed_player:
-            killed_player.is_alive = False
-            # 记录哪些狼人参与击杀
-            wolf_killers = []
-            for action in game.night_actions:
-                if action.get("role") == RoleType.wolf.value and str(action.get("targetId", "")) == killed_player_id:
-                    killer = next((p for p in game.players if p.id == str(action.get("playerId", ""))), None)
-                    if killer:
-                        wolf_killers.append(f"{killer.seat_number}号({killer.name})")
-            killer_info = "、".join(wolf_killers) if wolf_killers else "狼人"
-            game.announcements.append(f"{killer_info} 夜间击杀了 {killed_player.seat_number}号({killed_player.name})")
+    # --- Mark killed players as dead (狼杀 + 毒杀) ---
+    for dead_id in all_killed_ids:
+        dead_player = next((p for p in game.players if p.id == dead_id), None)
+        if dead_player:
+            dead_player.is_alive = False
+            # 记录狼人击杀
+            if dead_id == killed_player_id:
+                wolf_killers = []
+                for action in game.night_actions:
+                    if str(action.get("role", "")) == RoleType.wolf.value and str(action.get("targetId", "")) == dead_id:
+                        killer = next((p for p in game.players if p.id == str(action.get("playerId", ""))), None)
+                        if killer:
+                            wolf_killers.append(f"{killer.seat_number}号({killer.name})")
+                killer_info = "、".join(wolf_killers) if wolf_killers else "狼人"
+                game.announcements.append(f"{killer_info} 夜间击杀了 {dead_player.seat_number}号({dead_player.name})")
+            # 记录女巫毒杀
+            if dead_id == witch_poisoned_player_id:
+                witch_player = None
+                for action in game.night_actions:
+                    if str(action.get("role", "")) == RoleType.witch.value and str(action.get("actionType", "")) == "poison":
+                        witch_player = next((p for p in game.players if p.id == str(action.get("playerId", ""))), None)
+                        break
+                witch_label = f"{witch_player.seat_number}号({witch_player.name})" if witch_player else "女巫"
+                game.announcements.append(f"{witch_label} 使用毒药毒杀了 {dead_player.seat_number}号({dead_player.name})")
+
+    if witch_saved:
+        saved_player = next((p for p in game.players if p.id == witch_saved_player_id), None)
+        saved_name = f"{saved_player.seat_number}号({saved_player.name})" if saved_player else "某玩家"
+        game.announcements.append(f"女巫使用解药救活了 {saved_name}")
     elif blocked_by_guard:
         game.announcements.append("守卫成功守住了狼人袭击")
-    elif guard_targets:
+    elif guard_targets and not killed_player_id:
         game.announcements.append("守卫完成守护")
 
     # --- 记录夜间事件（贡献率用） ---
@@ -665,11 +889,15 @@ def resolve_night(game_id: str) -> dict[str, object]:
         "round": game.current_round,
         "killed_player_id": killed_player_id,
         "guard_blocked": blocked_by_guard,
+        "witch_saved": witch_saved,
+        "witch_saved_player_id": witch_saved_player_id,
+        "witch_poisoned_player_id": witch_poisoned_player_id,
+        "all_killed_ids": list(all_killed_ids),
     }
     # 预言家查验
     prophet_checks = []
     for action in game.night_actions:
-        if action.get("role") == RoleType.prophet.value:
+        if str(action.get("role", "")) == RoleType.prophet.value:
             target_id = str(action.get("targetId", ""))
             target = next((p for p in game.players if p.id == target_id), None)
             prophet_checks.append({
@@ -681,7 +909,7 @@ def resolve_night(game_id: str) -> dict[str, object]:
     # 守卫守护
     guard_saves = []
     for action in game.night_actions:
-        if action.get("role") == RoleType.guard.value:
+        if str(action.get("role", "")) == RoleType.guard.value:
             guard_saves.append({
                 "guard_id": str(action.get("playerId", "")),
                 "target_id": str(action.get("targetId", "")),
@@ -691,7 +919,7 @@ def resolve_night(game_id: str) -> dict[str, object]:
     # 狼人击杀
     wolf_kills = []
     for action in game.night_actions:
-        if action.get("role") == RoleType.wolf.value:
+        if str(action.get("role", "")) == RoleType.wolf.value:
             wolf_kills.append({
                 "wolf_id": str(action.get("playerId", "")),
                 "target_id": str(action.get("targetId", "")),
@@ -709,6 +937,21 @@ def resolve_night(game_id: str) -> dict[str, object]:
     # --- Reset night_action_done for all players ---
     for player in game.players:
         player.night_action_done = False
+
+    # --- 猎人死亡检测：如果是猎人且非毒杀，触发开枪 ---
+    game.pending_hunter_shoot = None
+    game.hunter_killed_by_poison = False
+    for dead_id in all_killed_ids:
+        dead_player = next((p for p in game.players if p.id == dead_id), None)
+        if dead_player and dead_player.role == RoleType.hunter:
+            if dead_id == witch_poisoned_player_id:
+                # 被毒杀的猎人不能开枪
+                game.hunter_killed_by_poison = True
+                game.announcements.append(f"猎人 {dead_player.seat_number}号({dead_player.name}) 被毒杀，无法开枪")
+            else:
+                # 被狼杀的猎人可以开枪
+                game.pending_hunter_shoot = dead_id
+                game.announcements.append(f"猎人 {dead_player.seat_number}号({dead_player.name}) 死亡，可以开枪")
 
     game.current_speaker_id = None
     game.speak_order.clear()
@@ -729,6 +972,10 @@ def resolve_night(game_id: str) -> dict[str, object]:
         "guarded_player_id": guarded_player_id,
         "guard_blocked": blocked_by_guard,
         "checked_results": checked_results,
+        "witch_saved": witch_saved,
+        "witch_saved_player_id": witch_saved_player_id,
+        "witch_poisoned_player_id": witch_poisoned_player_id,
+        "all_killed_ids": list(all_killed_ids),
     }
 
 
@@ -745,12 +992,15 @@ def resolve_vote_round(game_id: str, vote_tie_rule: str = "no_elimination") -> d
         game.speak_turn_submitted = False
         return {"eliminated": None, "winnerFaction": game.winner_faction}
 
-    tally: dict[str, int] = {}
+    tally: dict[str, float] = {}
     for vote in game.votes:
         target_id = str(vote.get("targetId", ""))
         if target_id == "abstain":
             continue  # 弃票不计入
-        tally[target_id] = tally.get(target_id, 0) + 1
+        voter_id = str(vote.get("voterId", ""))
+        # 警长票权1.5倍
+        weight = 1.5 if voter_id == game.sheriff_id else 1
+        tally[target_id] = tally.get(target_id, 0) + weight
 
     # 检查平票：如果最高票不止一人，则无人出局
     if tally:
@@ -782,6 +1032,7 @@ def resolve_vote_round(game_id: str, vote_tie_rule: str = "no_elimination") -> d
 
     eliminated_player = next((player for player in game.players if player.id == eliminated_id), None)
     idiot_immunity = False
+    hunter_voted_out = False
     if eliminated_player is not None:
         # 白痴翻牌免疫：被投票放逐时不死亡，但之后不能投票
         if eliminated_player.role == RoleType.idiot and not eliminated_player.vote_immunity_used:
@@ -790,6 +1041,11 @@ def resolve_vote_round(game_id: str, vote_tie_rule: str = "no_elimination") -> d
             # 白痴免疫，不算淘汰，但仍记录谁被投
         else:
             eliminated_player.is_alive = False
+            # 猎人被投票放逐，触发开枪
+            if eliminated_player.role == RoleType.hunter:
+                hunter_voted_out = True
+                game.pending_hunter_shoot = eliminated_id
+                game.hunter_killed_by_poison = False
         # 记录投票详情：谁投了谁，谁弃票了
         vote_detail_parts = []
         abstain_voters = []
@@ -838,6 +1094,7 @@ def resolve_vote_round(game_id: str, vote_tie_rule: str = "no_elimination") -> d
         "eliminated": eliminated_player.id if eliminated_player and not idiot_immunity else None,
         "eliminated_id_for_detail": eliminated_player.id if eliminated_player else None,
         "idiot_immunity": idiot_immunity,
+        "hunter_voted_out": hunter_voted_out,
         "winnerFaction": game.winner_faction,
         "gameStatus": game.game_status,
         "currentRound": game.current_round,
@@ -907,3 +1164,191 @@ def assign_roles_from_selection(
         player = next((p for p in game.players if p.id == player_id), None)
         if player:
             player.role = role
+
+
+# ------------------------------------------------------------------
+#  警长竞选相关函数
+# ------------------------------------------------------------------
+
+def register_sheriff_campaign(game_id: str, player_id: str) -> None:
+    """玩家上警（参加警长竞选）"""
+    game = _get_game_or_raise(game_id)
+    if game.game_status != GameStatus.sheriff_election:
+        raise AppError("当前不是警长竞选阶段", status_code=409)
+    player = next((p for p in game.players if p.id == player_id), None)
+    if player is None:
+        raise AppError("玩家不存在", status_code=404)
+    if not player.is_alive:
+        raise AppError("已死亡玩家不能参加竞选", status_code=409)
+    if player_id in game.sheriff_candidate_ids:
+        raise AppError("你已经上警了", status_code=409)
+    game.sheriff_candidate_ids.append(player_id)
+    game.announcements.append(f"{player.seat_number}号({player.name}) 上警竞选")
+
+
+def withdraw_sheriff_campaign(game_id: str, player_id: str) -> None:
+    """玩家退选"""
+    game = _get_game_or_raise(game_id)
+    if game.game_status != GameStatus.sheriff_election:
+        raise AppError("当前不是警长竞选阶段", status_code=409)
+    if player_id not in game.sheriff_candidate_ids:
+        raise AppError("你未参加竞选", status_code=409)
+    player = next((p for p in game.players if p.id == player_id), None)
+    game.sheriff_candidate_ids.remove(player_id)
+    if player:
+        game.announcements.append(f"{player.seat_number}号({player.name}) 退选")
+
+
+def record_sheriff_vote(game_id: str, voter_id: str, target_id: str) -> None:
+    """记录警长竞选投票。target_id="abstain"表示弃权。"""
+    game = _get_game_or_raise(game_id)
+    if game.game_status != GameStatus.sheriff_election:
+        raise AppError("当前不是警长竞选投票阶段", status_code=409)
+    voter = next((p for p in game.players if p.id == voter_id), None)
+    if voter is None:
+        raise AppError("玩家不存在", status_code=404)
+    if not voter.is_alive:
+        raise AppError("已死亡玩家不能投票", status_code=409)
+    if voter_id in game.sheriff_candidate_ids:
+        raise AppError("候选人不能投票", status_code=409)
+    is_abstain = not target_id or target_id == "abstain"
+    if not is_abstain:
+        if target_id not in game.sheriff_candidate_ids:
+            raise AppError("只能投给候选人", status_code=409)
+    # 去重：同一人重新投则覆盖
+    game.sheriff_votes = [v for v in game.sheriff_votes if v.get("voterId") != voter_id]
+    if is_abstain:
+        game.sheriff_votes.append({"voterId": voter_id, "targetId": "abstain"})
+    else:
+        game.sheriff_votes.append({"voterId": voter_id, "targetId": target_id})
+
+
+def resolve_sheriff_election(game_id: str) -> dict[str, object]:
+    """结算警长竞选。返回 {sheriff_id, is_tie}。"""
+    game = _get_game_or_raise(game_id)
+
+    # 如果没有候选人，无警长
+    if not game.sheriff_candidate_ids:
+        game.sheriff_votes.clear()
+        return {"sheriff_id": None, "is_tie": False}
+
+    # 如果只有一个候选人，直接当选
+    if len(game.sheriff_candidate_ids) == 1:
+        sheriff_id = game.sheriff_candidate_ids[0]
+        _set_sheriff(game_id, sheriff_id)
+        game.sheriff_votes.clear()
+        return {"sheriff_id": sheriff_id, "is_tie": False}
+
+    # 统计票数
+    tally: dict[str, float] = {}
+    for vote in game.sheriff_votes:
+        tid = str(vote.get("targetId", ""))
+        if tid == "abstain":
+            continue
+        tally[tid] = tally.get(tid, 0) + 1
+
+    if not tally:
+        # 全部弃权，无警长
+        game.sheriff_votes.clear()
+        return {"sheriff_id": None, "is_tie": True}
+
+    max_votes = max(tally.values())
+    top_candidates = [tid for tid, count in tally.items() if count == max_votes]
+
+    if len(top_candidates) > 1:
+        # 平票，无人当选
+        game.sheriff_votes.clear()
+        return {"sheriff_id": None, "is_tie": True}
+
+    sheriff_id = top_candidates[0]
+    _set_sheriff(game_id, sheriff_id)
+    game.sheriff_votes.clear()
+    return {"sheriff_id": sheriff_id, "is_tie": False}
+
+
+def _set_sheriff(game_id: str, sheriff_id: str) -> None:
+    """设置警长"""
+    game = _get_game_or_raise(game_id)
+    # 清除旧警长标记
+    for p in game.players:
+        p.is_sheriff = False
+    # 设置新警长
+    player = next((p for p in game.players if p.id == sheriff_id), None)
+    if player:
+        player.is_sheriff = True
+    game.sheriff_id = sheriff_id
+
+
+def transfer_sheriff_badge(game_id: str, from_player_id: str, to_player_id: str) -> None:
+    """警长转让徽章（警长死亡时选择继承人）"""
+    game = _get_game_or_raise(game_id)
+    if game.sheriff_id != from_player_id:
+        raise AppError("你不是警长，不能转让徽章", status_code=409)
+    target = next((p for p in game.players if p.id == to_player_id), None)
+    if target is None:
+        raise AppError("目标玩家不存在", status_code=404)
+    if not target.is_alive:
+        raise AppError("不能转让给已死亡的玩家", status_code=409)
+    _set_sheriff(game_id, to_player_id)
+    game.announcements.append(
+        f"警长徽章由 {seat_label(next((p for p in game.players if p.id == from_player_id), target))} "
+        f"转让给 {seat_label(target)}"
+    )
+
+
+def clear_sheriff_election(game_id: str) -> None:
+    """清空竞选状态"""
+    game = _get_game_or_raise(game_id)
+    game.sheriff_candidate_ids.clear()
+    game.sheriff_votes.clear()
+    game.sheriff_campaign_submitted = False
+
+
+# ------------------------------------------------------------------
+#  狼人自爆相关函数
+# ------------------------------------------------------------------
+
+def wolf_self_destruct(game_id: str, player_id: str) -> dict[str, object]:
+    """狼人自爆：狼人在白天发言/投票阶段选择自爆，立即死亡并跳过当天剩余流程。
+    返回 {player_id, player_name, winner_faction}。"""
+    game = _get_game_or_raise(game_id)
+    if game.game_status not in (GameStatus.speak, GameStatus.vote):
+        raise AppError("当前阶段不能自爆（仅发言/投票阶段可用）", status_code=409)
+    player = next((p for p in game.players if p.id == player_id), None)
+    if player is None:
+        raise AppError("玩家不存在", status_code=404)
+    if not player.is_alive:
+        raise AppError("已死亡玩家不能自爆", status_code=409)
+    if SKILL_REGISTRY[player.role].faction != "wolf":
+        raise AppError("只有狼人才能自爆", status_code=409)
+
+    # 执行自爆
+    player.is_alive = False
+    game.wolf_self_destructed = player_id
+    game.announcements.append(f"{player.seat_number}号({player.name}) 自爆了！身份是狼人！")
+
+    # 清除当前阶段的进行中数据
+    clear_votes(game_id)
+    game.current_speaker_id = None
+    game.speak_order.clear()
+    game.speak_turn_submitted = False
+    clear_deadline(game_id)
+
+    # 检查胜负
+    win_condition = get_preset_rule(game.room_settings.scene.preset, "win_condition")
+    winner = _check_win_condition(game, win_condition)
+    if winner:
+        game.winner_faction = winner
+        game.game_status = GameStatus.end
+
+    return {
+        "player_id": player_id,
+        "player_name": seat_label(player),
+        "winner_faction": game.winner_faction,
+    }
+
+
+def clear_wolf_self_destruct(game_id: str) -> None:
+    """清空自爆状态"""
+    game = _get_game_or_raise(game_id)
+    game.wolf_self_destructed = None

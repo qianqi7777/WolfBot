@@ -13,23 +13,13 @@ from app.domain.roles import get_skill, get_mock_speech, SKILL_REGISTRY
 from app.schemas.socket import SocketMessage
 from app.services.game_service import (
     AiRuntimeConfig,
-    advance_speak_turn,
-    begin_speak_turn,
-    clear_votes,
     get_game_state,
     get_seat_map,
     list_ai_players,
     list_alive_players,
     record_night_action,
-    record_speak,
-    record_vote,
-    resolve_night,
-    resolve_vote_round,
-    set_game_status,
-    seat_label,
 )
 from app.utils.time import utc_now_iso
-from app.websocket.broadcaster import manager
 
 logger = logging.getLogger(__name__)
 
@@ -104,7 +94,6 @@ async def _post_openai_compatible(
     messages: list[dict[str, str]],
     response_format: dict[str, str] | None = None,
 ) -> str:
-    # 清理 base_url 和 api_key 的前后空白（常见问题：复制粘贴带空格）
     base_url = runtime.base_url.strip()
     api_key = runtime.api_key.strip()
 
@@ -138,7 +127,6 @@ async def _post_openai_compatible(
             json=payload,
         )
 
-        # ── 按状态码分类处理，尽可能展示服务端返回的具体错误 ──
         if response.status_code == 400:
             body = _safe_response_body(response)
             logger.error("[AI] 400 Bad Request from %s model=%s body=%s", url, runtime.model, body)
@@ -212,7 +200,6 @@ async def test_ai_connection(game_id: str, runtime: AiRuntimeConfig | None = Non
     try:
         content = await _post_openai_compatible(runtime, messages)
     except AppError:
-        # 已经是友好错误信息（400/401/403/404等），直接透传
         raise
     except (httpx.HTTPError, KeyError, ValueError) as exc:
         logger.exception("AI connection test failed for game %s", game_id)
@@ -375,12 +362,10 @@ async def _generate_ai_vote(game_id: str, player_id: str) -> str:
     content = await _call_openai_compatible(game_id, messages)
     if content:
         raw = content.strip().strip('"')
-        # 尝试提取数字
         import re
         m = re.search(r'\d+', raw)
         if m:
             target_seat = int(m.group())
-            # 根据座位号找到玩家ID
             target_player = next(
                 (p for p in game.players if p.seat_number == target_seat and p.is_alive and p.id != player_id),
                 None,
@@ -393,27 +378,29 @@ async def _generate_ai_vote(game_id: str, player_id: str) -> str:
     return _mock_vote_target(game_id, player_id)
 
 
-async def _generate_ai_night_action(game_id: str, player_id: str) -> str:
+async def _generate_ai_night_action(game_id: str, player_id: str) -> tuple[str, str]:
     """Generate AI night action target using RoleSkill registry.
     - Uses skill.night_action_type to determine behavior
     - Uses skill.faction to determine valid targets
-    Returns target_id or empty string.
+    Returns (target_id, action_type). action_type is non-empty only for witch (\"save\"/\"poison\").
     """
     game = get_game_state(game_id)
     player = next((item for item in game.players if item.id == player_id), None)
     if player is None:
-        return ""
+        return "", ""
 
     skill = get_skill(player.role)
     if not skill.has_night_action:
-        return ""
+        return "", ""
+
+    # 女巫特殊处理：选择使用解药或毒药
+    if player.role == RoleType.witch:
+        return _ai_witch_night_action(game, player)
 
     # 构建目标列表
     if skill.faction == "wolf":
-        # 狼人：选非狼人存活玩家（含自己——自刀策略）
         targets = [p for p in game.players if p.is_alive and (SKILL_REGISTRY[p.role].faction != "wolf" or p.id == player_id)]
     else:
-        # 好人阵营：选存活非己玩家
         targets = [p for p in game.players if p.is_alive and p.id != player_id]
 
     # 守卫不能连续守同一人
@@ -423,304 +410,34 @@ async def _generate_ai_night_action(game_id: str, player_id: str) -> str:
             targets = filtered
 
     if not targets:
-        return ""
-    return random.choice(targets).id
+        return "", ""
+    return random.choice(targets).id, ""
 
 
-async def run_ai_cycle(game_id: str) -> None:
-    """Full game cycle: night → day → speak → vote, repeating until game over."""
-    game = get_game_state(game_id)
-    if game.ai_cycle_running or game.winner_faction is not None:
-        return
+def _ai_witch_night_action(game, player) -> tuple[str, str]:
+    """AI 女巫夜间行动决策：优先用毒药杀狼人，解药救好人。"""
+    alive_others = [p for p in game.players if p.is_alive and p.id != player.id]
 
-    game.ai_cycle_running = True
-    try:
-        max_rounds = 10
-        while game.current_round <= max_rounds:
-            game = get_game_state(game_id)
-            if game.winner_faction is not None:
-                break
+    # 毒药未使用：毒杀疑似狼人（优先非平民）
+    if not player.poison_used:
+        # 优先毒杀已知狼人（根据之前的查验信息等，但AI没有记忆；简化为随机选择）
+        # 策略：随机选择一个非自己的存活玩家
+        if alive_others:
+            target = random.choice(alive_others)
+            # 有一定概率选择使用毒药
+            if random.random() < 0.5:  # 50%概率使用毒药
+                return target.id, "poison"
 
-            # === Night Phase ===
-            set_game_status(game_id, GameStatus.night)
-            game = get_game_state(game_id)
-            await manager.broadcast(
-                game_id,
-                SocketMessage(
-                    type=MessageType.game_status,
-                    timestamp=utc_now_iso(),
-                    payload={"status": GameStatus.night.value, "currentRound": game.current_round},
-                ).model_dump_json(),
-            )
+    # 解药未使用：救活一个随机的存活玩家（通常是好人）
+    if not player.antidote_used:
+        if alive_others:
+            # 救一个非狼人阵营的玩家（AI女巫不知道谁被杀了，简化处理）
+            target = random.choice(alive_others)
+            if random.random() < 0.7:  # 70%概率使用解药
+                return target.id, "save"
 
-            # AI wolves act
-            alive_ai_wolves = [
-                p for p in game.players
-                if p.is_ai and p.is_alive and p.role == RoleType.wolf
-            ]
-            for ai_wolf in alive_ai_wolves:
-                target = await _generate_ai_night_action(game_id, ai_wolf.id)
-                if target:
-                    record_night_action(game_id, ai_wolf.id, target)
-
-            # AI prophets act
-            alive_ai_prophets = [
-                p for p in game.players
-                if p.is_ai and p.is_alive and p.role == RoleType.prophet
-            ]
-            for ai_prophet in alive_ai_prophets:
-                target = await _generate_ai_night_action(game_id, ai_prophet.id)
-                if target:
-                    record_night_action(game_id, ai_prophet.id, target)
-
-            # AI guards act
-            alive_ai_guards = [
-                p for p in game.players
-                if p.is_ai and p.is_alive and p.role == RoleType.guard
-            ]
-            for ai_guard in alive_ai_guards:
-                target = await _generate_ai_night_action(game_id, ai_guard.id)
-                if target:
-                    record_night_action(game_id, ai_guard.id, target)
-
-            # Notify human players to act
-            await manager.broadcast(
-                game_id,
-                SocketMessage(
-                    type=MessageType.night_action,
-                    timestamp=utc_now_iso(),
-                    payload={"actionRequired": True},
-                ).model_dump_json(),
-            )
-
-            # Wait for human night actions
-            game = get_game_state(game_id)
-            speak_timeout = game.room_settings.scene.speak_timeout_seconds
-            await asyncio.sleep(speak_timeout)
-
-            # Resolve night
-            night_result = resolve_night(game_id)
-
-            # Broadcast night result
-            killed_id = night_result.get("killed_player_id")
-            checked_results = night_result.get("checked_results", [])
-
-            await manager.broadcast(
-                game_id,
-                SocketMessage(
-                    type=MessageType.night_result,
-                    timestamp=utc_now_iso(),
-                    payload={
-                        "killedPlayerId": killed_id,
-                        "guardedPlayerId": night_result.get("guarded_player_id"),
-                        "guardBlocked": night_result.get("guard_blocked", False),
-                        "checkedResults": checked_results,
-                    },
-                ).model_dump_json(),
-            )
-
-            # Broadcast player update for killed player
-            if killed_id:
-                killed_player = next(
-                    (p for p in get_game_state(game_id).players if p.id == killed_id), None
-                )
-                # Note: the player is already marked dead in resolve_night,
-                # but we still have their name in the game state
-                await manager.broadcast(
-                    game_id,
-                    SocketMessage(
-                        type=MessageType.player_update,
-                        timestamp=utc_now_iso(),
-                        payload={
-                            "playerId": killed_id,
-                            "isAlive": False,
-                            "playerName": killed_player.name if killed_player else "",
-                        },
-                    ).model_dump_json(),
-                )
-
-            # Check win condition after night
-            game = get_game_state(game_id)
-            if game.winner_faction is not None:
-                await manager.broadcast(
-                    game_id,
-                    SocketMessage(
-                        type=MessageType.game_over,
-                        timestamp=utc_now_iso(),
-                        payload={
-                            "gameId": game_id,
-                            "winnerFaction": game.winner_faction,
-                            "currentRound": game.current_round,
-                            "players": [p.model_dump(by_alias=True) for p in game.players],
-                            "chats": game.chats,
-                            "announcements": game.announcements,
-                        },
-                    ).model_dump_json(),
-                )
-                break
-
-            # === Day Phase ===
-            set_game_status(game_id, GameStatus.day)
-            await manager.broadcast(
-                game_id,
-                SocketMessage(
-                    type=MessageType.game_status,
-                    timestamp=utc_now_iso(),
-                    payload={"status": GameStatus.day.value},
-                ).model_dump_json(),
-            )
-            await asyncio.sleep(2)  # Day announcement pause
-
-            # === Speak Phase ===
-            set_game_status(game_id, GameStatus.speak)
-            current_speaker_id = begin_speak_turn(game_id)
-            speak_turn_ids = get_game_state(game_id).speak_order or [player.id for player in get_game_state(game_id).players if player.is_alive]
-            await manager.broadcast(
-                game_id,
-                SocketMessage(
-                    type=MessageType.game_status,
-                    timestamp=utc_now_iso(),
-                    payload={
-                        "status": GameStatus.speak.value,
-                        "currentRound": get_game_state(game_id).current_round,
-                        "currentSpeakerId": current_speaker_id,
-                    },
-                ).model_dump_json(),
-            )
-            for turn_index, speaker_id in enumerate(speak_turn_ids):
-                game = get_game_state(game_id)
-                if game.winner_faction is not None:
-                    break
-
-                game.current_speaker_id = speaker_id
-                game.speak_turn_submitted = False
-                speaker = next((player for player in game.players if player.id == speaker_id), None)
-
-                await manager.broadcast(
-                    game_id,
-                    SocketMessage(
-                        type=MessageType.speak_turn,
-                        timestamp=utc_now_iso(),
-                        payload={
-                            "currentSpeakerId": speaker_id,
-                            "currentSpeakerName": speaker.name if speaker else "",
-                            "turnIndex": turn_index + 1,
-                            "turnCount": len(speak_turn_ids),
-                        },
-                    ).model_dump_json(),
-                )
-                await manager.broadcast(
-                    game_id,
-                    SocketMessage(
-                        type=MessageType.announce,
-                        timestamp=utc_now_iso(),
-                        payload={"content": f"轮到 {speaker.name if speaker else '玩家'} 发言"},
-                    ).model_dump_json(),
-                )
-
-                if speaker and speaker.is_ai:
-                    speech = await _generate_ai_speech(game_id, speaker.id)
-                    record_speak(game_id, speaker.id, speech)
-                    await manager.broadcast(
-                        game_id,
-                        SocketMessage(
-                            type=MessageType.ai_speak,
-                            timestamp=utc_now_iso(),
-                            payload={
-                                "content": speech,
-                                "playerId": speaker.id,
-                                "playerName": speaker.name,
-                                "isAI": True,
-                            },
-                        ).model_dump_json(),
-                    )
-                    await asyncio.sleep(0.2)
-                else:
-                    game_ref = get_game_state(game_id)
-                    speak_timeout = game_ref.room_settings.scene.speak_timeout_seconds
-                    deadline = asyncio.get_running_loop().time() + speak_timeout
-                    while asyncio.get_running_loop().time() < deadline:
-                        current_game = get_game_state(game_id)
-                        if current_game.speak_turn_submitted:
-                            break
-                        await asyncio.sleep(0.25)
-
-                advance_speak_turn(game_id)
-
-            # === Vote Phase ===
-            set_game_status(game_id, GameStatus.vote)
-            await manager.broadcast(
-                game_id,
-                SocketMessage(
-                    type=MessageType.game_status,
-                    timestamp=utc_now_iso(),
-                    payload={"status": GameStatus.vote.value, "currentRound": get_game_state(game_id).current_round},
-                ).model_dump_json(),
-            )
-
-            # AI players vote
-            for ai_player in list_ai_players(game_id):
-                target_id = await _generate_ai_vote(game_id, ai_player.id)
-                record_vote(game_id, ai_player.id, target_id)
-                await manager.broadcast(
-                    game_id,
-                    SocketMessage(
-                        type=MessageType.vote_result,
-                        timestamp=utc_now_iso(),
-                        payload={"voterId": ai_player.id, "targetId": target_id},
-                    ).model_dump_json(),
-                )
-                await asyncio.sleep(0.2)
-
-            # Wait for human votes
-            await asyncio.sleep(settings.ai_vote_window_seconds)
-
-            # Resolve vote
-            result = resolve_vote_round(game_id)
-            if result["eliminated"]:
-                eliminated = next(
-                    (item for item in get_game_state(game_id).players if item.id == result["eliminated"]),
-                    None,
-                )
-                await manager.broadcast(
-                    game_id,
-                    SocketMessage(
-                        type=MessageType.player_update,
-                        timestamp=utc_now_iso(),
-                        payload={
-                            "playerId": result["eliminated"],
-                            "isAlive": False,
-                            "playerName": eliminated.name if eliminated else "",
-                        },
-                    ).model_dump_json(),
-                )
-
-            if result.get("winnerFaction"):
-                await manager.broadcast(
-                    game_id,
-                    SocketMessage(
-                        type=MessageType.game_over,
-                        timestamp=utc_now_iso(),
-                        payload={
-                            "gameId": game_id,
-                            "winnerFaction": result["winnerFaction"],
-                            "currentRound": result["currentRound"],
-                            "players": [p.model_dump(by_alias=True) for p in get_game_state(game_id).players],
-                            "chats": get_game_state(game_id).chats,
-                            "announcements": get_game_state(game_id).announcements,
-                        },
-                    ).model_dump_json(),
-                )
-                break
-
-            clear_votes(game_id)
-            await asyncio.sleep(0.75)
-
-    except (AppError, httpx.HTTPError, KeyError, ValueError, json.JSONDecodeError):
-        logger.exception("AI cycle failed for game %s", game_id)
-    finally:
-        game = get_game_state(game_id)
-        game.ai_cycle_running = False
+    # 都不使用或无法使用
+    return "", ""
 
 
 def launch_ai_cycle(game_id: str) -> None:

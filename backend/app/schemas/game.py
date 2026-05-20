@@ -114,11 +114,16 @@ class GameSnapshot(BaseSchema):
     room_settings: RoomSettings
     owner_player_id: str | None = Field(default=None, alias="ownerPlayerId")
     game_mode: str = Field(default="classic", alias="gameMode")
+    sheriff_id: str | None = Field(default=None, alias="sheriffId")
+    sheriff_candidate_ids: list[str] = Field(default_factory=list, alias="sheriffCandidateIds")
+    room_code: str = Field(default="", alias="roomCode")
+    is_spectator: bool = Field(default=False, alias="isSpectator")
 
 
 class NightActionRequest(BaseSchema):
     player_id: str = Field(alias="playerId", min_length=1)
     target_id: str = Field(alias="targetId", min_length=1)
+    action_type: str = Field(default="", alias="actionType")  # "save" | "poison" for witch
 
 
 class GameResult(BaseSchema):

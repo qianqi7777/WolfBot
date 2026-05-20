@@ -114,3 +114,36 @@ async def start_room_route(game_id: str, playerId: str | None = Query(None, alia
                 ).model_dump_json()
                 await manager.send_to_player(game_id, player.id, role_msg)
     return snapshot
+
+
+@router.get("/code/{room_code}", response_model=GameSnapshot)
+async def lookup_room_code_route(room_code: str, playerId: str | None = Query(None, alias="playerId")) -> GameSnapshot:
+    """通过房间码查找游戏"""
+    from app.services.game_service import find_game_by_room_code
+    from app.core.exceptions import AppError
+
+    game_id = find_game_by_room_code(room_code)
+    if game_id is None:
+        raise AppError("房间码无效或房间已关闭", status_code=404)
+    return get_room(game_id, requester_id=playerId)
+
+
+@router.post("/{game_id}/spectate", response_model=GameSnapshot)
+async def spectate_room_route(game_id: str, payload: JoinGameRequest) -> GameSnapshot:
+    """以观战者身份加入"""
+    from app.services.game_service import join_as_spectator
+
+    snapshot = join_as_spectator(game_id, payload.player_name)
+    await manager.broadcast(
+        game_id,
+        SocketMessage(
+            type=MessageType.room_update,
+            timestamp=utc_now_iso(),
+            payload={
+                "gameId": snapshot.game_id,
+                "players": [player.model_dump(by_alias=True) for player in snapshot.players],
+                "roomSettings": snapshot.room_settings.model_dump(by_alias=True),
+            },
+        ).model_dump_json(),
+    )
+    return snapshot

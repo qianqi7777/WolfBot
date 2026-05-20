@@ -71,13 +71,14 @@ class BaseGameMode(abc.ABC):
         """解决抢身份冲突。返回 {player_id: assigned_role}。
 
         selections: {player_id: chosen_role}
-        available_roles: 可分配的角色列表
+        available_roles: 可分配的角色列表（含重复）
+        多个玩家抢同一角色时，优先随机分配，名额用完后剩余玩家随机分配。
         """
         result: dict[str, RoleType] = {}
         remaining_roles = list(available_roles)
-        assigned_players: set[str] = set()
 
-        # 按角色分组
+        from collections import Counter
+        role_quota: Counter[RoleType] = Counter(remaining_roles)
         role_applicants: dict[RoleType, list[str]] = {}
         for pid, role_str in selections.items():
             try:
@@ -86,30 +87,26 @@ class BaseGameMode(abc.ABC):
                 continue
             role_applicants.setdefault(role, []).append(pid)
 
-        # 处理每个角色的抢夺
+        assigned_players: set[str] = set()
         for role, applicants in role_applicants.items():
-            if role in remaining_roles:
-                # 随机选一人获得该角色
-                winner = random.choice(applicants)
+            available_slots = role_quota.get(role, 0)
+            winners = random.sample(applicants, min(len(applicants), available_slots))
+            for winner in winners:
                 result[winner] = role
                 remaining_roles.remove(role)
                 assigned_players.add(winner)
 
-        # 未抢到或未选择的玩家随机分配剩余角色
         unassigned = [pid for pid in selections if pid not in assigned_players]
         random.shuffle(remaining_roles)
         for i, pid in enumerate(unassigned):
             if i < len(remaining_roles):
                 result[pid] = remaining_roles[i]
-                assigned_players.add(pid)
 
         return result
 
     async def on_night_death(self, game_id: str, is_first_night: bool) -> bool:
         """夜间死亡时的钩子。返回是否允许遗言。"""
-        if is_first_night:
-            return self.first_night_last_words
-        return self.other_night_last_words
+        return self.first_night_last_words if is_first_night else self.other_night_last_words
 
     async def on_vote_elimination(self, game_id: str) -> bool:
         """投票淘汰时的钩子。返回是否允许遗言。"""
@@ -133,7 +130,7 @@ class ClassicMode(BaseGameMode):
 
 
 class RoleSelectMode(BaseGameMode):
-    """抢身份模式 — 开局前10秒抢身份"""
+    """抢身份模式 — 开局前20秒抢身份"""
 
     @property
     def mode_id(self) -> str:
@@ -149,7 +146,7 @@ class RoleSelectMode(BaseGameMode):
 
     @property
     def role_select_timeout_seconds(self) -> int:
-        return 10
+        return 20
 
     async def on_game_start(self, game_id: str) -> GameStatus:
         """抢身份模式：先进入抢身份阶段"""
@@ -167,7 +164,7 @@ class RoleSelectMode(BaseGameMode):
         return {
             "availableRoles": [r.value for r in available_roles],
             "timeoutSeconds": self.role_select_timeout_seconds,
-            "message": "请选择你想要的身份，10秒后截止。多人抢同一身份将随机分配。",
+            "message": f"请选择你想要的身份，{self.role_select_timeout_seconds}秒后截止。多人抢同一身份将随机分配。",
         }
 
     async def on_day_start(self, game_id: str) -> list[str]:

@@ -60,8 +60,8 @@ export async function submitVote(gameId: string, playerId: string, targetId: str
   await api.post(`/api/games/${gameId}/action/vote`, { targetId, playerId });
 }
 
-export async function submitNightAction(gameId: string, playerId: string, targetId: string): Promise<void> {
-  await api.post(`/api/games/${gameId}/action/night`, { playerId, targetId });
+export async function submitNightAction(gameId: string, playerId: string, targetId: string, actionType?: string): Promise<void> {
+  await api.post(`/api/games/${gameId}/action/night`, { playerId, targetId, actionType: actionType || '' });
 }
 
 export async function getResult(gameId: string): Promise<GameResultPayload> {

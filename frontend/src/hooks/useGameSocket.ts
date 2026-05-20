@@ -16,9 +16,16 @@ import type {
   VoteSummaryPayload,
   WolfTargetUpdate,
   RoleSelectStartPayload,
+  SheriffElectStartPayload,
+  SheriffCampaignPayload,
+  SheriffSpeechTurnPayload,
+  SheriffVotePayload,
+  SheriffElectResultPayload,
+  SheriffTransferPayload,
+  WolfSelfDestructPayload,
 } from '@/types/game';
 
-const GAME_STATUSES: GameStatus[] = ['waiting', 'role_select', 'night', 'day', 'speak', 'vote', 'end'];
+const GAME_STATUSES: GameStatus[] = ['waiting', 'role_select', 'night', 'day', 'sheriff_election', 'speak', 'vote', 'end'];
 const ROLE_TYPES: RoleType[] = ['wolf', 'civilian', 'prophet', 'guard', 'hunter', 'witch', 'idiot', 'unknown'];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -104,9 +111,11 @@ function isGameResultPayload(value: unknown): value is GameResultPayload {
   );
 }
 
+// 模块级共享 socket，确保所有组件（RoleSelect、SheriffElection 等）使用同一连接
+const socket = ref<WebSocket | null>(null);
+const isConnected = ref(false);
+
 export function useGameSocket() {
-  const socket = ref<WebSocket | null>(null);
-  const isConnected = ref(false);
   const store = useGameStore();
 
   // ── 自动重连机制 ──
@@ -262,7 +271,8 @@ export function useGameSocket() {
         break;
       case 'player_update':
         if (typeof message.payload?.playerId === 'string' && isBoolean(message.payload?.isAlive)) {
-          store.updatePlayerStatus(message.payload.playerId, message.payload.isAlive);
+          const isSheriff = isBoolean(message.payload?.isSheriff) ? message.payload.isSheriff as boolean : undefined;
+          store.updatePlayerStatus(message.payload.playerId, message.payload.isAlive, isSheriff);
         }
         break;
       case 'player_speak':
@@ -280,18 +290,18 @@ export function useGameSocket() {
         break;
       case 'speak_turn':
         if (isRecord(message.payload)) {
-          const payload = message.payload as SpeakTurnPayload;
+          const payload = message.payload as Record<string, unknown>;
           if (isNullableString(payload.currentSpeakerId)) {
             store.setCurrentSpeakerId(payload.currentSpeakerId);
           }
           if (typeof payload.deadline === 'string') {
             store.setDeadline(payload.deadline);
           }
-          if (typeof (message.payload as Record<string, unknown>).totalSeconds === 'number') {
-            store.setCurrentPhaseTimeout((message.payload as Record<string, unknown>).totalSeconds as number);
+          if (typeof payload.totalSeconds === 'number') {
+            store.setCurrentPhaseTimeout(payload.totalSeconds as number);
           }
           // 遗言标记
-          const isLastWords = (message.payload as Record<string, unknown>).isLastWords === true;
+          const isLastWords = payload.isLastWords === true;
           store.setIsLastWords(isLastWords);
         }
         break;
@@ -333,40 +343,11 @@ export function useGameSocket() {
         break;
       case 'night_result':
         if (isRecord(message.payload)) {
-          let checkedPlayerId: string | null = null;
-          let checkedRole: RoleType | null = null;
-          // Backend sends checkedResults: [{playerId, targetId, isWolf}]
-          // Find the result for the current player
-          if (Array.isArray(message.payload.checkedResults)) {
-            const myResult = message.payload.checkedResults.find(
-              (r: unknown) => isRecord(r) && r.playerId === store.myId,
-            );
-            if (myResult && isRecord(myResult)) {
-              checkedPlayerId = typeof myResult.targetId === 'string' ? myResult.targetId : null;
-              if (myResult.isWolf === true) {
-                checkedRole = 'wolf';
-              } else if (isRoleType(myResult.checkedRole)) {
-                checkedRole = myResult.checkedRole;
-              } else {
-                checkedRole = 'civilian';
-              }
-            }
-          }
+          // checkedResults 不再从广播获取——预言家查验结果仅通过私发 announce 传递
           const result: NightResultPayload = {
             killedPlayerId: typeof message.payload.killedPlayerId === 'string' ? message.payload.killedPlayerId : null,
             guardedPlayerId: typeof message.payload.guardedPlayerId === 'string' ? message.payload.guardedPlayerId : null,
-            guardBlocked: typeof message.payload.guardBlocked === 'boolean' ? message.payload.guardBlocked : undefined,
-            checkedResults: Array.isArray(message.payload.checkedResults)
-              ? message.payload.checkedResults.filter(
-                  (r: unknown) =>
-                    isRecord(r) &&
-                    typeof r.playerId === 'string' &&
-                    typeof r.targetId === 'string' &&
-                    typeof r.isWolf === 'boolean',
-                )
-              : undefined,
-            checkedPlayerId,
-            checkedRole,
+            guardBlocked: typeof message.payload.guardedPlayerId === 'boolean' ? message.payload.guardedPlayerId : undefined,
           };
           store.setNightResult(result);
           if (result.killedPlayerId) {
@@ -414,6 +395,127 @@ export function useGameSocket() {
           store.setResult(message.payload);
         } else if (typeof message.payload?.content === 'string') {
           store.addAnnounce(message.payload.content);
+        }
+        break;
+      case 'sheriff_elect_start':
+        if (isRecord(message.payload)) {
+          const electPayload: SheriffElectStartPayload = {
+            phase: typeof message.payload.phase === 'string' ? message.payload.phase as 'campaign' | 'speech' | 'vote' : 'campaign',
+            deadline: typeof message.payload.deadline === 'string' ? message.payload.deadline : '',
+            totalSeconds: typeof message.payload.totalSeconds === 'number' ? message.payload.totalSeconds : 5,
+            candidateIds: Array.isArray(message.payload.candidateIds)
+              ? message.payload.candidateIds.filter((id: unknown) => typeof id === 'string')
+              : [],
+          };
+          store.setSheriffElectStart(electPayload);
+          if (typeof message.payload.deadline === 'string') {
+            store.setDeadline(message.payload.deadline);
+          }
+          if (typeof message.payload.totalSeconds === 'number') {
+            store.setCurrentPhaseTimeout(message.payload.totalSeconds);
+          }
+        }
+        break;
+      case 'sheriff_campaign':
+        if (isRecord(message.payload)) {
+          const campaignPayload: SheriffCampaignPayload = {
+            action: typeof message.payload.action === 'string' ? message.payload.action as 'run' | 'withdraw' | 'register_done' : 'register_done',
+            playerId: typeof message.payload.playerId === 'string' ? message.payload.playerId : undefined,
+            playerName: typeof message.payload.playerName === 'string' ? message.payload.playerName : undefined,
+            candidateIds: Array.isArray(message.payload.candidateIds)
+              ? message.payload.candidateIds.filter((id: unknown) => typeof id === 'string')
+              : [],
+          };
+          store.setSheriffCandidateIds(campaignPayload.candidateIds);
+          // 也更新 store 的选举开始 payload 中的候选列表
+          if (store.sheriffElectStart) {
+            store.sheriffElectStart.candidateIds = campaignPayload.candidateIds;
+          }
+          // 公告
+          if (campaignPayload.action === 'run' && campaignPayload.playerName) {
+            store.addAnnounce(`${campaignPayload.playerName} 上警竞选`);
+          } else if (campaignPayload.action === 'withdraw' && campaignPayload.playerName) {
+            store.addAnnounce(`${campaignPayload.playerName} 退选`);
+          }
+        }
+        break;
+      case 'sheriff_speech_turn':
+        if (isRecord(message.payload)) {
+          const speechPayload: SheriffSpeechTurnPayload = {
+            currentSpeakerId: typeof message.payload.currentSpeakerId === 'string' ? message.payload.currentSpeakerId : '',
+            currentSpeakerName: typeof message.payload.currentSpeakerName === 'string' ? message.payload.currentSpeakerName : '',
+            turnIndex: typeof message.payload.turnIndex === 'number' ? message.payload.turnIndex : 1,
+            turnCount: typeof message.payload.turnCount === 'number' ? message.payload.turnCount : 1,
+            deadline: typeof message.payload.deadline === 'string' ? message.payload.deadline : '',
+            totalSeconds: typeof message.payload.totalSeconds === 'number' ? message.payload.totalSeconds : 15,
+          };
+          store.setSheriffSpeechTurn(speechPayload);
+          store.setCurrentSpeakerId(speechPayload.currentSpeakerId);
+          if (speechPayload.deadline) {
+            store.setDeadline(speechPayload.deadline);
+          }
+          store.setCurrentPhaseTimeout(speechPayload.totalSeconds);
+        }
+        break;
+      case 'sheriff_vote':
+        if (isRecord(message.payload) && Array.isArray(message.payload.candidateIds)) {
+          const votePayload: SheriffVotePayload = {
+            candidateIds: message.payload.candidateIds.filter((id: unknown) => typeof id === 'string'),
+            deadline: typeof message.payload.deadline === 'string' ? message.payload.deadline : '',
+            totalSeconds: typeof message.payload.totalSeconds === 'number' ? message.payload.totalSeconds : 30,
+          };
+          store.setSheriffVoteStart(votePayload);
+          if (votePayload.deadline) {
+            store.setDeadline(votePayload.deadline);
+          }
+          store.setCurrentPhaseTimeout(votePayload.totalSeconds);
+        }
+        break;
+      case 'sheriff_elect_result':
+        if (isRecord(message.payload)) {
+          const resultPayload: SheriffElectResultPayload = {
+            sheriffId: typeof message.payload.sheriffId === 'string' ? message.payload.sheriffId : null,
+            isTie: typeof message.payload.isTie === 'boolean' ? message.payload.isTie : false,
+            message: typeof message.payload.message === 'string' ? message.payload.message : '',
+          };
+          store.setSheriffElectResult(resultPayload);
+          store.setSheriffId(resultPayload.sheriffId);
+          if (resultPayload.message) {
+            store.addAnnounce(resultPayload.message);
+          }
+        }
+        break;
+      case 'wolf_self_destruct':
+        if (isRecord(message.payload)) {
+          const destructPayload: WolfSelfDestructPayload = {
+            playerId: typeof message.payload.playerId === 'string' ? message.payload.playerId : '',
+            playerName: typeof message.payload.playerName === 'string' ? message.payload.playerName : '',
+            playerRole: 'wolf',
+          };
+          store.setWolfSelfDestructed(destructPayload);
+          store.updatePlayerStatus(destructPayload.playerId, false);
+          store.addAnnounce(`⚠️ ${destructPayload.playerName} 自爆了！身份是狼人！`);
+        }
+        break;
+      case 'sheriff_transfer':
+        if (isRecord(message.payload)) {
+          const transferPayload: SheriffTransferPayload = {
+            fromPlayerId: typeof message.payload.fromPlayerId === 'string' ? message.payload.fromPlayerId : '',
+            toPlayerId: typeof message.payload.toPlayerId === 'string' ? message.payload.toPlayerId : undefined,
+            toPlayerName: typeof message.payload.toPlayerName === 'string' ? message.payload.toPlayerName : undefined,
+            needsChoice: typeof message.payload.needsChoice === 'boolean' ? message.payload.needsChoice : undefined,
+            candidateIds: Array.isArray(message.payload.candidateIds)
+              ? message.payload.candidateIds.filter((id: unknown) => typeof id === 'string')
+              : undefined,
+          };
+          store.setSheriffTransfer(transferPayload);
+          if (transferPayload.toPlayerId) {
+            store.setSheriffId(transferPayload.toPlayerId);
+          }
+          if (transferPayload.needsChoice) {
+            // 警长死亡需要选择继承人
+            store.addAnnounce('警长死亡，请选择继承人转让徽章');
+          }
         }
         break;
       case 'error':

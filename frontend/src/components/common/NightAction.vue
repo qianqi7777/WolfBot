@@ -91,10 +91,30 @@
         </div>
       </template>
 
-      <!-- 女巫：选择使用药剂的目标 -->
+      <!-- 女巫：选择药剂类型和目标 -->
       <template v-else-if="role === 'witch'">
-        <p>请选择要使用药剂的目标（解药救人或毒药杀人）：</p>
-        <el-radio-group v-model="selectedTarget" :disabled="disabled">
+        <p>请选择使用的药剂：</p>
+        <div class="potion-select">
+          <el-radio-group v-model="potionType" :disabled="disabled" size="large">
+            <el-radio-button
+              value="save"
+              :disabled="antidoteUsed"
+            >
+              💚 解药（救人）
+              <span v-if="antidoteUsed" class="used-label">已使用</span>
+            </el-radio-button>
+            <el-radio-button
+              value="poison"
+              :disabled="poisonUsed"
+            >
+              💀 毒药（杀人）
+              <span v-if="poisonUsed" class="used-label">已使用</span>
+            </el-radio-button>
+          </el-radio-group>
+        </div>
+        <p v-if="potionType === 'save'" class="hint-text">选择要解救的玩家（如果该玩家被狼人袭击，将存活）</p>
+        <p v-if="potionType === 'poison'" class="hint-text">选择要毒杀的玩家（该玩家将在天亮时死亡）</p>
+        <el-radio-group v-model="selectedTarget" :disabled="disabled || !potionType">
           <el-radio
             v-for="player in targetPlayers"
             :key="player.id"
@@ -105,11 +125,11 @@
         </el-radio-group>
         <el-button
           type="warning"
-          :disabled="disabled || !selectedTarget"
+          :disabled="disabled || !selectedTarget || !potionType"
           style="margin-top: 12px"
           @click="handleSubmit"
         >
-          确认使用药剂
+          确认使用{{ potionType === 'save' ? '解药' : '毒药' }}
         </el-button>
       </template>
 
@@ -133,20 +153,21 @@ const props = defineProps<{
   disabled?: boolean;
   currentPlayerId?: string;
   nightResult?: {
-    checkedPlayerId?: string | null;
-    checkedRole?: RoleType | null;
     guardedPlayerId?: string | null;
     guardBlocked?: boolean;
   } | null;
   teammateSeats?: string[];
   wolfTargetUpdates?: WolfTargetUpdate[];
+  antidoteUsed?: boolean;
+  poisonUsed?: boolean;
 }>();
 
 const emit = defineEmits<{
-  submit: [targetId: string];
+  submit: [targetId: string, actionType?: string];
 }>();
 
 const selectedTarget = ref('');
+const potionType = ref('');  // 'save' | 'poison'
 const roleLabels = ROLE_LABELS;
 
 /** 狼人队友（从后端推送的 teammates 数据） */
@@ -155,7 +176,13 @@ const teammates = computed(() => props.teammateSeats ?? []);
 /** 狼人队友的实时刀目标 */
 const wolfTargetUpdates = computed(() => props.wolfTargetUpdates ?? []);
 
-/** 目标玩家：仅存活的玩家，狼人可以选自己（自刀） */
+/** 女巫解药已使用 */
+const antidoteUsed = computed(() => props.antidoteUsed ?? false);
+
+/** 女巫毒药已使用 */
+const poisonUsed = computed(() => props.poisonUsed ?? false);
+
+/** 目标玩家：仅存活的玩家，狼人和女巫毒药可以选自己 */
 const targetPlayers = computed(() => {
   const canTargetSelf = props.role === 'wolf';
   return props.players.filter(
@@ -163,11 +190,10 @@ const targetPlayers = computed(() => {
   );
 });
 
-/** 查验结果显示（仅预言家） */
+/** 查验结果显示（暂从 announce 获取，Phase 2 重构） */
 const checkResult = computed(() => {
-  if (props.role !== 'prophet' || !props.nightResult?.checkedPlayerId) return null;
-  const target = props.players.find((p) => p.id === props.nightResult!.checkedPlayerId);
-  return target ? { seatLabel: `${target.seatNumber}号`, role: props.nightResult.checkedRole ?? 'unknown' } : null;
+  // TODO: Phase 2 从私发 announce 解析查验结果
+  return null;
 });
 
 const guardResult = computed(() => {
@@ -178,8 +204,9 @@ const guardResult = computed(() => {
 
 const handleSubmit = () => {
   if (selectedTarget.value) {
-    emit('submit', selectedTarget.value);
+    emit('submit', selectedTarget.value, potionType.value || undefined);
     selectedTarget.value = '';
+    potionType.value = '';
   }
 };
 </script>
@@ -214,5 +241,20 @@ const handleSubmit = () => {
 .wolf-target-arrow {
   color: #e6a23c;
   font-weight: bold;
+}
+.potion-select {
+  margin-bottom: 16px;
+}
+.potion-select .el-radio-button {
+  margin-right: 8px;
+}
+.hint-text {
+  color: #909399;
+  font-size: 13px;
+  margin: 8px 0;
+}
+.used-label {
+  color: #c0c4cc;
+  font-size: 12px;
 }
 </style>

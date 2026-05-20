@@ -5,6 +5,7 @@ export const GAME_STATUS_LABELS: Record<GameStatus, string> = {
   role_select: '抢身份',
   night: '夜间阶段',
   day: '白天阶段',
+  sheriff_election: '警长竞选',
   speak: '发言阶段',
   vote: '投票阶段',
   end: '对局结束',

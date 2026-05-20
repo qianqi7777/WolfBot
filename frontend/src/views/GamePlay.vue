@@ -26,6 +26,15 @@
         :current-player-id="store.myId"
         @submit="submitVote"
       />
+      <!-- 狼人自爆按钮 -->
+      <el-button
+        v-if="canWolfSelfDestruct"
+        type="danger"
+        @click="handleWolfSelfDestruct"
+        style="width: 100%"
+      >
+        💀 狼人自爆
+      </el-button>
       <!-- 投票结果明细展示 -->
       <el-card v-if="voteSummaryDisplay" class="vote-summary-card" shadow="always">
         <template #header>投票结果</template>
@@ -69,6 +78,8 @@
       </el-card>
       <!-- 抢身份阶段 -->
       <RoleSelect v-if="store.gameStatus === 'role_select' && store.roleSelectStart" />
+      <!-- 警长竞选阶段 -->
+      <SheriffElection v-if="showSheriffElection" />
       <NightAction
         v-if="showNightAction"
         :role="store.myRole"
@@ -77,6 +88,8 @@
         :night-result="store.nightResult"
         :teammate-seats="store.wolfTeammates"
         :wolf-target-updates="store.wolfTargetUpdates"
+        :antidote-used="selfPlayer?.antidoteUsed"
+        :poison-used="selfPlayer?.poisonUsed"
         @submit="submitNightActionHandler"
       />
       <!-- 预言家查验结果独立展示（NightAction提交后组件卸载，结果在此持续显示） -->
@@ -101,7 +114,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, watch } from 'vue';
 import { useRouter } from 'vue-router';
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import { isAxiosError } from 'axios';
 
 import { submitSpeak as apiSpeak, submitVote as apiVote, submitNightAction as apiNightAction } from '@/api/gameApi';
@@ -110,6 +123,7 @@ import ChatBox from '@/components/common/ChatBox.vue';
 import CountdownTimer from '@/components/common/CountdownTimer.vue';
 import NightAction from '@/components/common/NightAction.vue';
 import RoleSelect from '@/components/common/RoleSelect.vue';
+import SheriffElection from '@/components/common/SheriffElection.vue';
 import VotePanel from '@/components/common/VotePanel.vue';
 import RoleCard from '@/components/common/RoleCard.vue';
 import GameStatus from '@/components/game/GameStatus.vue';
@@ -150,17 +164,38 @@ const showNightAction = computed(
   () => canPlayerNightAction(store.gameStatus, store.myRole, selfPlayer.value ?? undefined) && store.nightActionRequired,
 );
 
-/** 预言家查验结果：在NightAction组件卸载后依然持续显示，直到进入下一轮夜晚 */
+const showSheriffElection = computed(
+  () => store.gameStatus === 'sheriff_election' &&
+    (store.sheriffElectStart !== null || store.sheriffSpeechTurn !== null ||
+     store.sheriffVoteStart !== null || store.sheriffElectResult !== null),
+);
+
+/** 是否显示狼人自爆按钮 */
+const canWolfSelfDestruct = computed(
+  () => store.myRole === 'wolf'
+    && (store.gameStatus === 'speak' || store.gameStatus === 'vote')
+    && selfPlayer.value?.isAlive === true
+    && !store.wolfSelfDestructed,
+);
+
+/** 狼人自爆确认 */
+const handleWolfSelfDestruct = async () => {
+  try {
+    await ElMessageBox.confirm(
+      '自爆后将立即死亡并跳过白天剩余流程，确定要自爆吗？',
+      '狼人自爆',
+      { confirmButtonText: '确定自爆', cancelButtonText: '取消', type: 'warning' },
+    );
+    send({ type: 'wolf_self_destruct', payload: {} });
+  } catch {
+    // 用户取消
+  }
+};
+
+/** 预言家查验结果：从 announce 私发消息中获取，暂不在此解析 */
 const prophetCheckDisplay = computed(() => {
-  if (store.myRole !== 'prophet' || !store.nightResult?.checkedPlayerId) return null;
-  const target = store.players.find((p) => p.id === store.nightResult!.checkedPlayerId);
-  if (!target) return null;
-  const checkedRole = store.nightResult.checkedRole ?? 'unknown';
-  return {
-    seatLabel: `${target.seatNumber}号`,
-    role: checkedRole,
-    roleLabel: ROLE_LABELS[checkedRole] ?? '未知',
-  };
+  // TODO: Phase 2 中从私发 announce 消息解析预言家查验结果
+  return null;
 });
 
 /** 投票结果汇总：按被投目标分组，显示谁投了谁；弃票单独展示 */
@@ -222,9 +257,9 @@ const submitVote = async (targetId: string) => {
   }
 };
 
-const submitNightActionHandler = async (targetId: string) => {
+const submitNightActionHandler = async (targetId: string, actionType?: string) => {
   try {
-    await apiNightAction(store.gameId, store.myId, targetId);
+    await apiNightAction(store.gameId, store.myId, targetId, actionType);
     store.setNightActionRequired(false);
   } catch (error) {
     ElMessage.error(getErrorMessage(error, '提交夜间行动失败'));

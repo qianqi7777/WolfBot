@@ -6,6 +6,7 @@ class GameStatus(str, Enum):
     role_select = "role_select"  # 抢身份阶段
     night = "night"
     day = "day"
+    sheriff_election = "sheriff_election"  # 警长竞选阶段
     speak = "speak"
     vote = "vote"
     end = "end"
@@ -41,4 +42,11 @@ class MessageType(str, Enum):
     role_select_choice = "role_select_choice"   # 玩家提交抢身份选择
     role_select_result = "role_select_result"   # 抢身份结果公布
     last_words = "last_words"             # 遗言
+    sheriff_elect_start = "sheriff_elect_start"   # 警长竞选开始
+    sheriff_campaign = "sheriff_campaign"         # 玩家上警/退选
+    sheriff_speech_turn = "sheriff_speech_turn"   # 警长竞选发言轮次
+    sheriff_vote = "sheriff_vote"                 # 警长竞选投票
+    sheriff_elect_result = "sheriff_elect_result" # 警长竞选结果
+    sheriff_transfer = "sheriff_transfer"         # 警长转让徽章
+    wolf_self_destruct = "wolf_self_destruct"     # 狼人自爆
     error = "error"                       # 错误消息

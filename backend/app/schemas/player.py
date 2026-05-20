@@ -14,3 +14,7 @@ class Player(BaseSchema):
     night_action_done: bool = False
     last_guard_target_id: str | None = Field(default=None, alias="lastGuardTargetId")
     vote_immunity_used: bool = False  # 白痴翻牌免疫已使用
+    is_sheriff: bool = False  # 是否是警长
+    antidote_used: bool = False  # 女巫解药已使用
+    poison_used: bool = False  # 女巫毒药已使用
+    is_spectator: bool = False  # 是否是观战者

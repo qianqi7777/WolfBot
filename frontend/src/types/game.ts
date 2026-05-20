@@ -1,4 +1,4 @@
-export type GameStatus = 'waiting' | 'role_select' | 'night' | 'day' | 'speak' | 'vote' | 'end';
+export type GameStatus = 'waiting' | 'role_select' | 'night' | 'day' | 'sheriff_election' | 'speak' | 'vote' | 'end';
 
 export type RoleType = 'wolf' | 'civilian' | 'prophet' | 'guard' | 'hunter' | 'witch' | 'idiot' | 'unknown';
 
@@ -55,6 +55,10 @@ export interface Player {
   isAI: boolean;
   isAlive: boolean;
   lastGuardTargetId?: string | null;
+  isSheriff?: boolean;
+  antidoteUsed?: boolean;
+  poisonUsed?: boolean;
+  isSpectator?: boolean;
 }
 
 export interface ChatMessage {
@@ -133,6 +137,9 @@ export interface SpeakTurnPayload {
   currentSpeakerName?: string;
   turnIndex?: number;
   turnCount?: number;
+  deadline?: string;
+  totalSeconds?: number;
+  isLastWords?: boolean;
 }
 
 // 夜间行动请求载荷
@@ -141,14 +148,15 @@ export interface NightActionPayload {
   actionType: 'kill' | 'check';
 }
 
-// 夜间结果载荷
+// 夜间结果载荷（checkedResults 不再广播，预言家查验结果仅私发）
 export interface NightResultPayload {
   killedPlayerId: string | null;
   guardedPlayerId?: string | null;
   guardBlocked?: boolean;
-  checkedResults?: Array<{ playerId: string; targetId: string; isWolf: boolean }>;
-  checkedPlayerId: string | null;
-  checkedRole: RoleType | null;
+  witchSaved?: boolean;
+  witchSavedPlayerId?: string | null;
+  witchPoisonedPlayerId?: string | null;
+  allKilledIds?: string[];
 }
 
 // 抢身份开始载荷
@@ -171,6 +179,64 @@ export interface RoleSelectResultPayload {
   message: string;
 }
 
+// 警长竞选开始载荷
+export interface SheriffElectStartPayload {
+  phase: 'campaign' | 'speech' | 'vote';
+  deadline: string;
+  totalSeconds: number;
+  candidateIds: string[];
+}
+
+// 警长竞选行动载荷（上警/退选）
+export interface SheriffCampaignPayload {
+  action: 'run' | 'withdraw' | 'register_done';
+  playerId?: string;
+  playerName?: string;
+  candidateIds: string[];
+}
+
+// 警长竞选发言轮次
+export interface SheriffSpeechTurnPayload {
+  currentSpeakerId: string;
+  currentSpeakerName: string;
+  turnIndex: number;
+  turnCount: number;
+  deadline: string;
+  totalSeconds: number;
+}
+
+// 警长竞选投票载荷
+export interface SheriffVotePayload {
+  candidateIds: string[];
+  deadline: string;
+  totalSeconds: number;
+}
+
+// 警长竞选结果
+export interface SheriffElectResultPayload {
+  sheriffId: string | null;
+  isTie: boolean;
+  message: string;
+}
+
+// 警长转让载荷
+export interface SheriffTransferPayload {
+  fromPlayerId: string;
+  toPlayerId?: string;
+  toPlayerName?: string;
+  needsChoice?: boolean;
+  candidateIds?: string[];
+  deadline?: string;
+  totalSeconds?: number;
+}
+
+// 狼人自爆载荷
+export interface WolfSelfDestructPayload {
+  playerId: string;
+  playerName: string;
+  playerRole: 'wolf';
+}
+
 export interface GameSnapshot {
   gameId: string;
   playerId: string;
@@ -185,6 +251,10 @@ export interface GameSnapshot {
   roomSettings: RoomSettings;
   ownerPlayerId?: string;
   gameMode: GameMode;
+  sheriffId?: string | null;
+  sheriffCandidateIds?: string[];
+  roomCode?: string;
+  isSpectator?: boolean;
 }
 
 export interface SocketMessage<TPayload = Record<string, unknown>> {
@@ -207,6 +277,13 @@ export interface SocketMessage<TPayload = Record<string, unknown>> {
     | 'role_select_choice'
     | 'role_select_result'
     | 'last_words'
+    | 'sheriff_elect_start'
+    | 'sheriff_campaign'
+    | 'sheriff_speech_turn'
+    | 'sheriff_vote'
+    | 'sheriff_elect_result'
+    | 'sheriff_transfer'
+    | 'wolf_self_destruct'
     | 'error';
   payload?: TPayload;
   timestamp?: string;

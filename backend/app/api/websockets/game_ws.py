@@ -5,7 +5,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from app.core.exceptions import AppError
 from app.domain.enums import MessageType
 from app.schemas.socket import SocketMessage
-from app.services.game_service import change_seat, get_game, get_game_state, get_player_role, record_night_action, record_speak, record_last_words, record_vote, start_game, record_role_selection
+from app.services.game_service import change_seat, get_game, get_game_state, get_player_role, record_night_action, record_speak, record_last_words, record_vote, start_game, record_role_selection, register_sheriff_campaign, withdraw_sheriff_campaign, record_sheriff_vote, transfer_sheriff_badge, wolf_self_destruct
 from app.domain.enums import GameStatus, RoleType
 from app.domain.roles import SKILL_REGISTRY
 from app.services.ai_service import launch_ai_cycle
@@ -151,10 +151,11 @@ async def game_ws(websocket: WebSocket) -> None:
                 )
             elif message_type == "night_action":
                 target_id = str(payload.get("targetId", "")).strip()
+                action_type = str(payload.get("actionType", "")).strip()  # 女巫用: "save" / "poison"
                 if target_id and (player_id or snapshot.player_id):
                     try:
                         actor_id = player_id or snapshot.player_id
-                        record_night_action(game_id, actor_id, target_id)
+                        record_night_action(game_id, actor_id, target_id, action_type)
                         await manager.send_to(
                             websocket,
                             SocketMessage(
@@ -255,8 +256,180 @@ async def game_ws(websocket: WebSocket) -> None:
                         )
                     except AppError:
                         pass
+            elif message_type == "sheriff_campaign":
+                # 警长竞选：上警或退选
+                action = str(payload.get("action", "")).strip()  # "run" 或 "withdraw"
+                if player_id:
+                    try:
+                        if action == "run":
+                            register_sheriff_campaign(game_id, player_id)
+                            game = get_game_state(game_id)
+                            player = next((p for p in game.players if p.id == player_id), None)
+                            display_name = f"{player.seat_number}号({player.name})" if player else "玩家"
+                            await manager.broadcast(
+                                game_id,
+                                SocketMessage(
+                                    type=MessageType.sheriff_campaign,
+                                    timestamp=utc_now_iso(),
+                                    payload={
+                                        "action": "run",
+                                        "playerId": player_id,
+                                        "playerName": display_name,
+                                        "candidateIds": game.sheriff_candidate_ids,
+                                    },
+                                ).model_dump_json(),
+                            )
+                        elif action == "withdraw":
+                            withdraw_sheriff_campaign(game_id, player_id)
+                            game = get_game_state(game_id)
+                            player = next((p for p in game.players if p.id == player_id), None)
+                            display_name = f"{player.seat_number}号({player.name})" if player else "玩家"
+                            await manager.broadcast(
+                                game_id,
+                                SocketMessage(
+                                    type=MessageType.sheriff_campaign,
+                                    timestamp=utc_now_iso(),
+                                    payload={
+                                        "action": "withdraw",
+                                        "playerId": player_id,
+                                        "playerName": display_name,
+                                        "candidateIds": game.sheriff_candidate_ids,
+                                    },
+                                ).model_dump_json(),
+                            )
+                    except AppError as exc:
+                        await manager.send_to(
+                            websocket,
+                            SocketMessage(type=MessageType.error, timestamp=utc_now_iso(), payload={"content": exc.message}).model_dump_json(),
+                        )
+            elif message_type == "sheriff_vote":
+                # 警长竞选投票
+                target_id = str(payload.get("targetId", "")).strip()
+                effective_target = target_id if target_id and target_id != "abstain" else "abstain"
+                if player_id:
+                    try:
+                        record_sheriff_vote(game_id, player_id, effective_target)
+                        await manager.send_to(
+                            websocket,
+                            SocketMessage(
+                                type=MessageType.announce,
+                                timestamp=utc_now_iso(),
+                                payload={"content": "警长竞选投票已提交"},
+                            ).model_dump_json(),
+                        )
+                    except AppError as exc:
+                        await manager.send_to(
+                            websocket,
+                            SocketMessage(type=MessageType.error, timestamp=utc_now_iso(), payload={"content": exc.message}).model_dump_json(),
+                        )
+            elif message_type == "wolf_self_destruct":
+                # 狼人自爆
+                if player_id:
+                    try:
+                        result = wolf_self_destruct(game_id, player_id)
+                        destruct_name = result.get("player_name", "某玩家")
+                        await manager.broadcast(
+                            game_id,
+                            SocketMessage(
+                                type=MessageType.wolf_self_destruct,
+                                timestamp=utc_now_iso(),
+                                payload={
+                                    "playerId": player_id,
+                                    "playerName": destruct_name,
+                                    "playerRole": "wolf",
+                                },
+                            ).model_dump_json(),
+                        )
+                        await manager.broadcast(
+                            game_id,
+                            SocketMessage(
+                                type=MessageType.player_update,
+                                timestamp=utc_now_iso(),
+                                payload={
+                                    "playerId": player_id,
+                                    "isAlive": False,
+                                    "playerName": destruct_name,
+                                },
+                            ).model_dump_json(),
+                        )
+                    except AppError as exc:
+                        await manager.send_to(
+                            websocket,
+                            SocketMessage(type=MessageType.error, timestamp=utc_now_iso(), payload={"content": exc.message}).model_dump_json(),
+                        )
+            elif message_type == "sheriff_transfer":
+                # 警长转让徽章
+                target_id = str(payload.get("targetId", "")).strip()
+                if player_id and target_id:
+                    try:
+                        transfer_sheriff_badge(game_id, player_id, target_id)
+                        game = get_game_state(game_id)
+                        target = next((p for p in game.players if p.id == target_id), None)
+                        target_name = f"{target.seat_number}号({target.name})" if target else "玩家"
+                        await manager.broadcast(
+                            game_id,
+                            SocketMessage(
+                                type=MessageType.sheriff_transfer,
+                                timestamp=utc_now_iso(),
+                                payload={
+                                    "fromPlayerId": player_id,
+                                    "toPlayerId": target_id,
+                                    "toPlayerName": target_name,
+                                },
+                            ).model_dump_json(),
+                        )
+                        await manager.broadcast(
+                            game_id,
+                            SocketMessage(
+                                type=MessageType.player_update,
+                                timestamp=utc_now_iso(),
+                                payload={
+                                    "playerId": target_id,
+                                    "isAlive": True,
+                                    "playerName": target_name,
+                                    "isSheriff": True,
+                                },
+                            ).model_dump_json(),
+                        )
+                    except AppError as exc:
+                        await manager.send_to(
+                            websocket,
+                            SocketMessage(type=MessageType.error, timestamp=utc_now_iso(), payload={"content": exc.message}).model_dump_json(),
+                        )
+            elif message_type == "hunter_shoot":
+                # 猎人开枪
+                target_id = str(payload.get("targetId", "")).strip()
+                if target_id and player_id:
+                    game = get_game_state(game_id)
+                    if game.pending_hunter_shoot == player_id:
+                        target = next((p for p in game.players if p.id == target_id), None)
+                        if target and target.is_alive and target.id != player_id:
+                            target.is_alive = False
+                            game.pending_hunter_shoot = None
+                            hunter = next((p for p in game.players if p.id == player_id), None)
+                            hunter_name = f"{hunter.seat_number}号({hunter.name})" if hunter else "猎人"
+                            target_name = f"{target.seat_number}号({target.name})"
+                            await manager.broadcast(
+                                game_id,
+                                SocketMessage(
+                                    type=MessageType.announce,
+                                    timestamp=utc_now_iso(),
+                                    payload={"content": f"🔫 {hunter_name} 开枪带走了 {target_name}！"},
+                                ).model_dump_json(),
+                            )
+                            await manager.broadcast(
+                                game_id,
+                                SocketMessage(
+                                    type=MessageType.player_update,
+                                    timestamp=utc_now_iso(),
+                                    payload={
+                                        "playerId": target_id,
+                                        "isAlive": False,
+                                        "playerName": target_name,
+                                    },
+                                ).model_dump_json(),
+                            )
             elif message_type == "role_select_choice":
-                # 抢身份选择
                 chosen_role = str(payload.get("role", "")).strip()
                 if chosen_role and player_id:
                     try:

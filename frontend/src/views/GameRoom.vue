@@ -283,12 +283,21 @@ const resetSettings = () => {
   Object.assign(settingsForm.ai, next.ai);
 };
 
-const onPresetChange = (preset: string) => {
+const onPresetChange = async (preset: string) => {
   const opt = SCENE_PRESET_OPTIONS.find((o) => o.value === preset);
   if (opt) {
     settingsForm.scene.name = opt.label;
     settingsForm.scene.description = opt.description;
     settingsForm.scene.playerCount = opt.playerCount;
+    // 自动保存设置，避免座位网格与后端 max_seats 不一致
+    try {
+      const snapshot = await updateRoomSettings(props.gameId, settingsForm);
+      store.applySnapshot(snapshot, store.myId || snapshot.playerId);
+      saveAiConfigToLocal(settingsForm.ai);
+      ElMessage.success('预设已切换并保存');
+    } catch {
+      ElMessage.warning('预设已切换，请手动保存设置后再选座');
+    }
   }
 };
 

@@ -15,6 +15,7 @@
 import asyncio
 import json
 import logging
+import random
 from typing import Any
 
 from app.domain.enums import GameStatus, MessageType, RoleType
@@ -52,6 +53,15 @@ from app.services.game_service import (
     assign_roles_from_selection,
     _assign_roles,
     _assign_seat_numbers,
+    register_sheriff_campaign,
+    withdraw_sheriff_campaign,
+    record_sheriff_vote,
+    resolve_sheriff_election,
+    transfer_sheriff_badge,
+    clear_sheriff_election,
+    wolf_self_destruct,
+    clear_wolf_self_destruct,
+    seat_label,
 )
 from app.services.ai_service import (
     _generate_ai_speech,
@@ -170,6 +180,108 @@ class Judge:
         clear_deadline(self.game_id)
         game.current_speaker_id = None
         game.speak_turn_submitted = False
+
+    # ------------------------------------------------------------------
+    #  猎人开枪处理
+    # ------------------------------------------------------------------
+
+    async def _handle_hunter_shoot(self) -> bool:
+        """处理猎人开枪。猎人死亡后可以选择开枪带走一人。
+        返回 True 继续，False 结束游戏。"""
+        game = self._game()
+        hunter_id = game.pending_hunter_shoot
+        if not hunter_id:
+            return True
+
+        logger.info("[Judge] game=%s 猎人 %s 触发开枪", self.game_id, hunter_id)
+        hunter = next((p for p in game.players if p.id == hunter_id), None)
+        if not hunter:
+            game.pending_hunter_shoot = None
+            return True
+
+        hunter_name = f"{hunter.seat_number}号({hunter.name})"
+        await self._announce(f"🔫 {hunter_name}（猎人）死亡，可以开枪带走一名玩家！")
+
+        # 获取可射击目标：存活玩家（不含自己）
+        targets = [p for p in game.players if p.is_alive and p.id != hunter_id]
+        if not targets:
+            await self._announce("没有可射击的目标")
+            game.pending_hunter_shoot = None
+            return True
+
+        shoot_timeout = 30
+
+        if hunter.is_ai:
+            # AI 猎人自动选择目标
+            import random as _random
+            # 策略：优先射杀狼人，但不能100%确定
+            suspected_wolves = [p for p in targets if SKILL_REGISTRY[p.role].faction == "wolf"]
+            if suspected_wolves and _random.random() < 0.6:
+                target = _random.choice(suspected_wolves)
+            else:
+                target = _random.choice(targets)
+
+            target_name = f"{target.seat_number}号({target.name})"
+            await self._announce(f"🔫 {hunter_name} 开枪带走了 {target_name}！")
+            target.is_alive = False
+
+            await self._broadcast(MessageType.player_update, {
+                "playerId": target.id,
+                "isAlive": False,
+                "playerName": target_name,
+            })
+        else:
+            # 真人猎人：设置回合并等待选择
+            deadline = set_deadline(self.game_id, shoot_timeout)
+            # 广播猎人开枪请求
+            await self._broadcast(MessageType.announce, {
+                "content": f"🔫 猎人请选择开枪目标（{shoot_timeout}秒）",
+                "hunterShoot": True,
+                "hunterId": hunter_id,
+                "candidateIds": [p.id for p in targets],
+                "deadline": deadline,
+            })
+
+            # 等待真人选择
+            end_time = asyncio.get_running_loop().time() + shoot_timeout
+            target = None
+            while asyncio.get_running_loop().time() < end_time:
+                current_game = self._game()
+                if current_game.pending_hunter_shoot is None:
+                    # 已处理（通过 WebSocket 消息设置）
+                    break
+                await asyncio.sleep(0.5)
+
+            # 超时自动选择
+            current_game = self._game()
+            if current_game.pending_hunter_shoot:
+                import random as _random
+                target = _random.choice(targets)
+                target_name = f"{target.seat_number}号({target.name})"
+                await self._announce(f"🔫 超时未选择，{hunter_name} 自动开枪带走了 {target_name}！")
+                target.is_alive = False
+                await self._broadcast(MessageType.player_update, {
+                    "playerId": target.id,
+                    "isAlive": False,
+                    "playerName": target_name,
+                })
+
+            clear_deadline(self.game_id)
+
+        # 清除开枪状态
+        game.pending_hunter_shoot = None
+
+        # 检查被猎人带走的玩家是否是警长
+        if target and game.sheriff_id == target.id:
+            await self._handle_sheriff_death(target.id)
+
+        # 检查胜负
+        game = self._game()
+        if game.winner_faction is not None:
+            await self._broadcast_game_over()
+            return False
+
+        return True
 
     # ------------------------------------------------------------------
     #  抢身份阶段
@@ -343,26 +455,44 @@ class Judge:
         logger.info("[Judge] game=%s 结算夜晚", self.game_id)
         night_result = resolve_night(self.game_id)
         self._last_night_result = night_result  # 保存给 day_phase 使用
-        return await self._announce_night_result(night_result)
+        continue_game = await self._announce_night_result(night_result)
+        if not continue_game:
+            return False
+        # 猎人开枪（如果猎人被狼杀）
+        continue_game = await self._handle_hunter_shoot()
+        return continue_game
 
     async def _ask_role(self, game, role_type: RoleType) -> None:
-        """法官询问指定角色 — 通用方法，支持所有有夜间行动的角色"""
+        """法官询问指定角色 — 暗牌场：无论该角色是否存在，都要展示询问环节（防止角色推断）"""
         skill = get_skill(role_type)
         alive_players = [
             p for p in game.players
             if p.is_alive and p.role == role_type
         ]
-        if not alive_players:
-            return
 
-        await self._announce(f"{skill.name}请睁眼，请选择要行动的目标")
+        # 暗牌场：总是公告"X请睁眼"（即使该角色已死亡或不存在）
+        from app.domain.roles import get_preset
+        preset_id = game.room_settings.scene.preset
+        try:
+            preset = get_preset(preset_id)
+            is_dark = preset.is_dark
+        except ValueError:
+            is_dark = True
+        if is_dark or alive_players:
+            await self._announce(f"{skill.name}请睁眼，请选择要行动的目标")
+
+        if not alive_players:
+            # 暗牌场：即使无人存活也要稍作等待（模拟）
+            if is_dark:
+                await asyncio.sleep(1.0)
+            return
 
         # AI 玩家自动行动
         ai_players = [p for p in alive_players if p.is_ai]
         for ai_p in ai_players:
-            target = await _generate_ai_night_action(self.game_id, ai_p.id)
+            target, action_type = await _generate_ai_night_action(self.game_id, ai_p.id)
             if target:
-                record_night_action(self.game_id, ai_p.id, target)
+                record_night_action(self.game_id, ai_p.id, target, action_type or "")
 
         # 通知真人玩家提交行动
         human_players = [p for p in alive_players if not p.is_ai]
@@ -393,48 +523,72 @@ class Judge:
         guarded_player_id = night_result.get("guarded_player_id")
         guard_blocked = night_result.get("guard_blocked", False)
         checked_results = night_result.get("checked_results", [])
+        witch_saved = night_result.get("witch_saved", False)
+        witch_saved_player_id = night_result.get("witch_saved_player_id")
+        witch_poisoned_player_id = night_result.get("witch_poisoned_player_id")
+        all_killed_ids: list[str] = night_result.get("all_killed_ids", [])
 
         game = self._game()
         is_first_night = game.current_round == 1
 
-        if killed_id:
-            # 有人被杀：发送 night_result 和 player_update（不再发公告）
-            killed_player = next(
-                (p for p in self._game().players if p.id == killed_id), None
-            )
-            name = f"{killed_player.seat_number}号({killed_player.name})" if killed_player else "某玩家"
-            await self._broadcast(MessageType.night_result, {
-                "killedPlayerId": killed_id,
-                "guardedPlayerId": guarded_player_id,
-                "guardBlocked": guard_blocked,
-                "checkedResults": checked_results,
-            })
+        # 发送 night_result 广播（汇总所有死亡信息）
+        await self._broadcast(MessageType.night_result, {
+            "killedPlayerId": killed_id,
+            "guardedPlayerId": guarded_player_id,
+            "guardBlocked": guard_blocked,
+            "witchSaved": witch_saved,
+            "witchSavedPlayerId": witch_saved_player_id,
+            "witchPoisonedPlayerId": witch_poisoned_player_id,
+            "allKilledIds": all_killed_ids,
+        })
+
+        # 发送 player_update 给每个死亡的玩家
+        for dead_id in all_killed_ids:
+            dead_player = next((p for p in self._game().players if p.id == dead_id), None)
+            name = f"{dead_player.seat_number}号({dead_player.name})" if dead_player else "某玩家"
             await self._broadcast(MessageType.player_update, {
-                "playerId": killed_id,
+                "playerId": dead_id,
                 "isAlive": False,
                 "playerName": name,
             })
-            # 遗言：根据模式决定是否允许（首夜/非首夜区分）
+
+        # 遗言处理：为每个死亡玩家处理遗言
+        for dead_id in all_killed_ids:
+            dead_player = next((p for p in self._game().players if p.id == dead_id), None)
+            if not dead_player:
+                continue
+            name = f"{dead_player.seat_number}号({dead_player.name})"
             allow_last_words = False
             if self._mode:
                 allow_last_words = await self._mode.on_night_death(self.game_id, is_first_night)
-            if allow_last_words and killed_player:
+            if allow_last_words:
                 await self._announce(f"{name} 可以发表遗言（首夜遗言）")
-                await self._wait_last_words(killed_id, name, timeout_seconds=self._preset_rules.get("last_words_timeout_seconds", 30))
-        elif guard_blocked:
-            await self._broadcast(MessageType.night_result, {
-                "killedPlayerId": None,
-                "guardedPlayerId": guarded_player_id,
-                "guardBlocked": True,
-                "checkedResults": checked_results,
-            })
-        else:
-            await self._broadcast(MessageType.night_result, {
-                "killedPlayerId": None,
-                "guardedPlayerId": None,
-                "guardBlocked": False,
-                "checkedResults": checked_results,
-            })
+                await self._wait_last_words(dead_id, name, timeout_seconds=self._preset_rules.get("last_words_timeout_seconds", 30))
+
+        # 如果没有死亡，发送平安夜/守卫/女巫救活信息
+        if not all_killed_ids:
+            if witch_saved:
+                saved_player = next((p for p in self._game().players if p.id == witch_saved_player_id), None)
+                saved_name = f"{saved_player.seat_number}号({saved_player.name})" if saved_player else "某玩家"
+                await self._broadcast(MessageType.night_result, {
+                    "killedPlayerId": None,
+                    "guardedPlayerId": guarded_player_id,
+                    "guardBlocked": guard_blocked,
+                    "witchSaved": True,
+                    "witchSavedPlayerId": witch_saved_player_id,
+                })
+            elif guard_blocked:
+                await self._broadcast(MessageType.night_result, {
+                    "killedPlayerId": None,
+                    "guardedPlayerId": guarded_player_id,
+                    "guardBlocked": True,
+                })
+            else:
+                await self._broadcast(MessageType.night_result, {
+                    "killedPlayerId": None,
+                    "guardedPlayerId": None,
+                    "guardBlocked": False,
+                })
 
         # 向预言家私发查验结果
         for check in checked_results:
@@ -458,11 +612,557 @@ class Judge:
         return True
 
     # ------------------------------------------------------------------
+    #  警长竞选阶段（仅第一轮白天前）
+    # ------------------------------------------------------------------
+
+    async def sheriff_election_phase(self) -> bool:
+        """执行警长竞选阶段。仅在第一轮白天前调用。
+        流程：上警注册 → 竞选发言 → 投票 → 结果公告
+        返回 True 继续，False 结束。"""
+        game = self._game()
+        set_game_status(self.game_id, GameStatus.sheriff_election)
+
+        await self._broadcast(MessageType.game_status, {
+            "status": GameStatus.sheriff_election.value,
+            "currentRound": game.current_round,
+        })
+        await self._announce("警长竞选阶段开始！请选择是否上警")
+
+        # ── 阶段1：上警注册 ──
+        campaign_timeout = 15  # 给真人足够时间
+        deadline = set_deadline(self.game_id, campaign_timeout)
+        await self._broadcast(MessageType.sheriff_elect_start, {
+            "phase": "campaign",
+            "deadline": deadline,
+            "totalSeconds": campaign_timeout,
+            "candidateIds": [],
+        })
+
+        # AI 玩家自动决定是否上警
+        for ai_p in list_ai_players(self.game_id):
+            # 神职和狼人更可能上警，平民较少上警
+            should_run = self._ai_should_run_for_sheriff(ai_p)
+            if should_run:
+                register_sheriff_campaign(self.game_id, ai_p.id)
+
+        # 等待真人上警
+        logger.info("[Judge] game=%s 等待玩家上警，超时=%ds", self.game_id, campaign_timeout)
+        await asyncio.sleep(campaign_timeout)
+        clear_deadline(self.game_id)
+
+        game = self._game()
+        candidates = game.sheriff_candidate_ids
+        await self._broadcast(MessageType.sheriff_campaign, {
+            "action": "register_done",
+            "candidateIds": candidates,
+        })
+
+        if not candidates:
+            await self._announce("无人上警，本局无警长")
+            clear_sheriff_election(self.game_id)
+            return True
+
+        if len(candidates) == 1:
+            # 只有一人上警，直接当选
+            winner = next((p for p in game.players if p.id == candidates[0]), None)
+            name = f"{winner.seat_number}号({winner.name})" if winner else "某玩家"
+            result = resolve_sheriff_election(self.game_id)
+            sheriff_id = result.get("sheriff_id")
+            if sheriff_id:
+                await self._announce(f"仅 {name} 上警，自动当选警长！")
+                await self._broadcast(MessageType.sheriff_elect_result, {
+                    "sheriffId": sheriff_id,
+                    "isTie": False,
+                    "message": f"{name} 当选警长",
+                })
+                await self._broadcast(MessageType.player_update, {
+                    "playerId": sheriff_id,
+                    "isAlive": True,
+                    "playerName": name,
+                    "isSheriff": True,
+                })
+            clear_sheriff_election(self.game_id)
+            return True
+
+        # ── 阶段2：竞选发言（候选人按座位顺序发言） ──
+        await self._announce(f"{'、'.join(self._candidate_labels(game))} 上警，开始竞选发言")
+        candidates_sorted = sorted(
+            candidates,
+            key=lambda cid: next((p.seat_number for p in game.players if p.id == cid), 0),
+        )
+
+        for turn_idx, candidate_id in enumerate(candidates_sorted):
+            game = self._game()
+            if game.winner_faction is not None:
+                return False
+
+            # 检查退选
+            if candidate_id not in game.sheriff_candidate_ids:
+                continue
+
+            candidate = next((p for p in game.players if p.id == candidate_id), None)
+            if not candidate:
+                continue
+
+            game.current_speaker_id = candidate_id
+            game.sheriff_campaign_submitted = False
+
+            speak_timeout = game.room_settings.scene.speak_timeout_seconds
+            deadline = set_deadline(self.game_id, speak_timeout)
+            await self._broadcast(MessageType.sheriff_speech_turn, {
+                "currentSpeakerId": candidate_id,
+                "currentSpeakerName": f"{candidate.seat_number}号({candidate.name})",
+                "turnIndex": turn_idx + 1,
+                "turnCount": len(game.sheriff_candidate_ids),
+                "deadline": deadline,
+                "totalSeconds": speak_timeout,
+            })
+            await self._announce(f"轮到 {candidate.seat_number}号({candidate.name}) 竞选发言")
+
+            if candidate.is_ai:
+                # AI 竞选发言
+                speech = await self._generate_ai_sheriff_speech(candidate)
+                record_speak(self.game_id, candidate.id, speech)
+                await self._broadcast(MessageType.ai_speak, {
+                    "content": speech,
+                    "playerId": candidate.id,
+                    "playerName": f"{candidate.seat_number}号({candidate.name})【竞选】",
+                    "isAI": True,
+                })
+                await asyncio.sleep(0.3)
+            else:
+                # 真人竞选发言：等待超时
+                end_time = asyncio.get_running_loop().time() + speak_timeout
+                while asyncio.get_running_loop().time() < end_time:
+                    current_game = self._game()
+                    if current_game.sheriff_campaign_submitted:
+                        break
+                    await asyncio.sleep(0.25)
+
+            clear_deadline(self.game_id)
+            game.current_speaker_id = None
+            game.sheriff_campaign_submitted = False
+
+        # ── 阶段3：投票选举警长 ──
+        game = self._game()
+        # 重新获取候选人（可能有人退选了）
+        final_candidates = list(game.sheriff_candidate_ids)
+        if not final_candidates:
+            await self._announce("所有候选人退选，本局无警长")
+            clear_sheriff_election(self.game_id)
+            return True
+
+        await self._announce("竞选发言结束，请投票选举警长")
+
+        vote_timeout = self._preset_rules.get("vote_timeout_seconds", 30)
+        deadline = set_deadline(self.game_id, vote_timeout)
+        await self._broadcast(MessageType.sheriff_vote, {
+            "candidateIds": final_candidates,
+            "deadline": deadline,
+            "totalSeconds": vote_timeout,
+        })
+
+        # AI 投票（非候选人 AI）
+        for ai_p in list_ai_players(self.game_id):
+            if ai_p.id not in game.sheriff_candidate_ids:
+                target = self._ai_vote_for_sheriff(ai_p, final_candidates)
+                if target:
+                    record_sheriff_vote(self.game_id, ai_p.id, target)
+                await asyncio.sleep(0.2)
+
+        # 等待真人投票
+        non_candidate_alive = [
+            p for p in game.players
+            if p.is_alive and p.id not in game.sheriff_candidate_ids and not p.is_ai
+        ]
+        end_time = asyncio.get_running_loop().time() + vote_timeout
+        while asyncio.get_running_loop().time() < end_time:
+            current_game = self._game()
+            voted_ids = {str(v.get("voterId", "")) for v in current_game.sheriff_votes}
+            if all(p.id in voted_ids for p in non_candidate_alive):
+                break
+            await asyncio.sleep(0.5)
+
+        clear_deadline(self.game_id)
+
+        # ── 结算 ──
+        result = resolve_sheriff_election(self.game_id)
+        sheriff_id = result.get("sheriff_id")
+        is_tie = result.get("is_tie", False)
+
+        if sheriff_id:
+            sheriff_player = next((p for p in self._game().players if p.id == sheriff_id), None)
+            name = f"{sheriff_player.seat_number}号({sheriff_player.name})" if sheriff_player else "某玩家"
+            tally_lines = self._sheriff_vote_tally(self._game())
+            await self._announce(f"投票结果：{name} 当选警长！{tally_lines}")
+            await self._broadcast(MessageType.sheriff_elect_result, {
+                "sheriffId": sheriff_id,
+                "isTie": False,
+                "message": f"{name} 当选警长",
+            })
+            await self._broadcast(MessageType.player_update, {
+                "playerId": sheriff_id,
+                "isAlive": True,
+                "playerName": name,
+                "isSheriff": True,
+            })
+            clear_sheriff_election(self.game_id)
+            return True
+
+        if is_tie and len(final_candidates) >= 2:
+            # 平票：再来一轮发言+投票
+            await self._announce("投票平票，进入第二轮竞选发言")
+            game.sheriff_votes.clear()
+
+            # 第二轮发言
+            for turn_idx, candidate_id in enumerate(final_candidates):
+                game = self._game()
+                if candidate_id not in game.sheriff_candidate_ids:
+                    continue
+                candidate = next((p for p in game.players if p.id == candidate_id), None)
+                if not candidate:
+                    continue
+                game.current_speaker_id = candidate_id
+                game.sheriff_campaign_submitted = False
+
+                speak_timeout = game.room_settings.scene.speak_timeout_seconds
+                deadline = set_deadline(self.game_id, speak_timeout)
+                await self._broadcast(MessageType.sheriff_speech_turn, {
+                    "currentSpeakerId": candidate_id,
+                    "currentSpeakerName": f"{candidate.seat_number}号({candidate.name})",
+                    "turnIndex": turn_idx + 1,
+                    "turnCount": len(final_candidates),
+                    "deadline": deadline,
+                    "totalSeconds": speak_timeout,
+                })
+                await self._announce(f"第二轮：轮到 {candidate.seat_number}号({candidate.name}) 竞选发言")
+
+                if candidate.is_ai:
+                    speech = await self._generate_ai_sheriff_speech(candidate)
+                    record_speak(self.game_id, candidate.id, speech)
+                    await self._broadcast(MessageType.ai_speak, {
+                        "content": speech,
+                        "playerId": candidate.id,
+                        "playerName": f"{candidate.seat_number}号({candidate.name})【竞选】",
+                        "isAI": True,
+                    })
+                    await asyncio.sleep(0.3)
+                else:
+                    end_time = asyncio.get_running_loop().time() + speak_timeout
+                    while asyncio.get_running_loop().time() < end_time:
+                        current_game = self._game()
+                        if current_game.sheriff_campaign_submitted:
+                            break
+                        await asyncio.sleep(0.25)
+
+                clear_deadline(self.game_id)
+                game.current_speaker_id = None
+                game.sheriff_campaign_submitted = False
+
+            # 第二轮投票
+            game.sheriff_votes.clear()
+            await self._announce("第二轮发言结束，请重新投票选举警长")
+            vote_timeout = self._preset_rules.get("vote_timeout_seconds", 30)
+            deadline = set_deadline(self.game_id, vote_timeout)
+            await self._broadcast(MessageType.sheriff_vote, {
+                "candidateIds": final_candidates,
+                "deadline": deadline,
+                "totalSeconds": vote_timeout,
+            })
+
+            for ai_p in list_ai_players(self.game_id):
+                if ai_p.id not in game.sheriff_candidate_ids:
+                    target = self._ai_vote_for_sheriff(ai_p, final_candidates)
+                    if target:
+                        record_sheriff_vote(self.game_id, ai_p.id, target)
+                    await asyncio.sleep(0.2)
+
+            end_time = asyncio.get_running_loop().time() + vote_timeout
+            while asyncio.get_running_loop().time() < end_time:
+                current_game = self._game()
+                voted_ids = {str(v.get("voterId", "")) for v in current_game.sheriff_votes}
+                if all(p.id in voted_ids for p in non_candidate_alive):
+                    break
+                await asyncio.sleep(0.5)
+            clear_deadline(self.game_id)
+
+            result = resolve_sheriff_election(self.game_id)
+            sheriff_id = result.get("sheriff_id")
+            is_tie = result.get("is_tie", False)
+
+            if sheriff_id:
+                sheriff_player = next((p for p in self._game().players if p.id == sheriff_id), None)
+                name = f"{sheriff_player.seat_number}号({sheriff_player.name})" if sheriff_player else "某玩家"
+                tally_lines = self._sheriff_vote_tally(self._game())
+                await self._announce(f"第二轮投票结果：{name} 当选警长！{tally_lines}")
+                await self._broadcast(MessageType.sheriff_elect_result, {
+                    "sheriffId": sheriff_id,
+                    "isTie": False,
+                    "message": f"{name} 当选警长",
+                })
+                await self._broadcast(MessageType.player_update, {
+                    "playerId": sheriff_id,
+                    "isAlive": True,
+                    "playerName": name,
+                    "isSheriff": True,
+                })
+            else:
+                await self._announce("两轮投票均平票，本局无警长")
+                await self._broadcast(MessageType.sheriff_elect_result, {
+                    "sheriffId": None,
+                    "isTie": True,
+                    "message": "平票，本局无警长",
+                })
+        else:
+            await self._announce("投票平票，本局无警长")
+            await self._broadcast(MessageType.sheriff_elect_result, {
+                "sheriffId": None,
+                "isTie": is_tie,
+                "message": "本局无警长",
+            })
+
+        clear_sheriff_election(self.game_id)
+        return True
+
+    def _candidate_labels(self, game) -> list[str]:
+        """获取候选人座位标签列表"""
+        labels = []
+        for cid in game.sheriff_candidate_ids:
+            p = next((pl for pl in game.players if pl.id == cid), None)
+            if p:
+                labels.append(f"{p.seat_number}号({p.name})")
+        return labels
+
+    def _ai_should_run_for_sheriff(self, player) -> bool:
+        """AI 决定是否上警。神职和狼人更倾向上警。"""
+        import random
+        skill = get_skill(player.role)
+        if skill.faction == "wolf":
+            return random.random() < 0.3  # 狼人30%概率上警
+        if player.role in (RoleType.prophet, RoleType.witch, RoleType.guard):
+            return random.random() < 0.6  # 神职60%概率上警
+        return random.random() < 0.15  # 平民/猎人/白痴15%概率上警
+
+    async def _generate_ai_sheriff_speech(self, player) -> str:
+        """AI 生成竞选警长发言"""
+        import random
+        game = self._game()
+        skill = get_skill(player.role)
+
+        templates = [
+            f"大家好，我是{player.seat_number}号，我觉得这局我应该当警长，请大家支持我。",
+            f"各位好，{player.seat_number}号申请上警。我希望能带领好人阵营走向胜利。",
+            f"我是{player.seat_number}号，我想竞选警长。如果有警长的话，发言会更有条理。",
+        ]
+        return random.choice(templates)
+
+    def _ai_vote_for_sheriff(self, player, candidates: list[str]) -> str | None:
+        """AI 投票选警长"""
+        if not candidates:
+            return None
+        # 随机投一个候选人
+        return random.choice(candidates)
+
+    def _sheriff_vote_tally(self, game) -> str:
+        """生成警长竞选投票统计文本"""
+        tally: dict[str, int] = {}
+        for v in game.sheriff_votes:
+            tid = str(v.get("targetId", ""))
+            if tid == "abstain":
+                continue
+            tally[tid] = tally.get(tid, 0) + 1
+        lines = []
+        for tid, count in sorted(tally.items(), key=lambda x: -x[1]):
+            p = next((pl for pl in game.players if pl.id == tid), None)
+            label = f"{p.seat_number}号({p.name})" if p else "某玩家"
+            lines.append(f"{label}：{count}票")
+        return f"（{'；'.join(lines)}）" if lines else ""
+
+    async def _handle_sheriff_death(self, dead_player_id: str) -> None:
+        """处理警长死亡：转让徽章"""
+        game = self._game()
+        if game.sheriff_id != dead_player_id:
+            return
+
+        dead_player = next((p for p in game.players if p.id == dead_player_id), None)
+        name = f"{dead_player.seat_number}号({dead_player.name})" if dead_player else "某玩家"
+        await self._announce(f"警长 {name} 死亡，需要转让警长徽章")
+
+        if dead_player and dead_player.is_ai:
+            # AI 警长自动转让给存活的好人
+            alive_non_wolf = [
+                p for p in game.players
+                if p.is_alive and p.id != dead_player_id
+                and SKILL_REGISTRY[p.role].faction == "civilian"
+            ]
+            if alive_non_wolf:
+                target = random.choice(alive_non_wolf)
+                transfer_sheriff_badge(self.game_id, dead_player_id, target.id)
+                target_name = f"{target.seat_number}号({target.name})"
+                await self._announce(f"警长徽章转让给 {target_name}")
+                await self._broadcast(MessageType.sheriff_transfer, {
+                    "fromPlayerId": dead_player_id,
+                    "toPlayerId": target.id,
+                    "toPlayerName": target_name,
+                })
+                await self._broadcast(MessageType.player_update, {
+                    "playerId": target.id,
+                    "isAlive": True,
+                    "playerName": target_name,
+                    "isSheriff": True,
+                })
+            else:
+                # 没有存活的好人可以转让，转让给任意存活玩家
+                alive_others = [
+                    p for p in game.players
+                    if p.is_alive and p.id != dead_player_id
+                ]
+                if alive_others:
+                    target = random.choice(alive_others)
+                    transfer_sheriff_badge(self.game_id, dead_player_id, target.id)
+                    target_name = f"{target.seat_number}号({target.name})"
+                    await self._announce(f"警长徽章转让给 {target_name}")
+                    await self._broadcast(MessageType.sheriff_transfer, {
+                        "fromPlayerId": dead_player_id,
+                        "toPlayerId": target.id,
+                        "toPlayerName": target_name,
+                    })
+                    await self._broadcast(MessageType.player_update, {
+                        "playerId": target.id,
+                        "isAlive": True,
+                        "playerName": target_name,
+                        "isSheriff": True,
+                    })
+                else:
+                    # 无人可转让
+                    game.sheriff_id = None
+                    await self._announce("警长徽章无人可继承，本局后续无警长")
+        else:
+            # 真人警长：等待选择继承人
+            alive_others = [
+                p for p in game.players
+                if p.is_alive and p.id != dead_player_id
+            ]
+            if not alive_others:
+                game.sheriff_id = None
+                return
+
+            transfer_timeout = 30
+            deadline = set_deadline(self.game_id, transfer_timeout)
+            await self._broadcast(MessageType.sheriff_transfer, {
+                "fromPlayerId": dead_player_id,
+                "needsChoice": True,
+                "candidateIds": [p.id for p in alive_others],
+                "deadline": deadline,
+                "totalSeconds": transfer_timeout,
+            })
+
+            # 等待真人选择
+            end_time = asyncio.get_running_loop().time() + transfer_timeout
+            original_sheriff_id = game.sheriff_id
+            while asyncio.get_running_loop().time() < end_time:
+                current_game = self._game()
+                if current_game.sheriff_id != original_sheriff_id:
+                    # 已转让
+                    break
+                await asyncio.sleep(0.5)
+
+            clear_deadline(self.game_id)
+            if game.sheriff_id == dead_player_id:
+                # 超时未选择，自动转让
+                if alive_others:
+                    target = random.choice(alive_others)
+                    transfer_sheriff_badge(self.game_id, dead_player_id, target.id)
+                    target_name = f"{target.seat_number}号({target.name})"
+                    await self._announce(f"警长超时未选择，徽章自动转让给 {target_name}")
+                    await self._broadcast(MessageType.sheriff_transfer, {
+                        "fromPlayerId": dead_player_id,
+                        "toPlayerId": target.id,
+                        "toPlayerName": target_name,
+                    })
+                    await self._broadcast(MessageType.player_update, {
+                        "playerId": target.id,
+                        "isAlive": True,
+                        "playerName": target_name,
+                        "isSheriff": True,
+                    })
+
+    # ------------------------------------------------------------------
+    #  狼人自爆处理
+    # ------------------------------------------------------------------
+
+    async def _handle_wolf_self_destruct(self, player_id: str) -> bool:
+        """处理狼人自爆：公告 → 遗言 → 警长转让 → 进入夜晚。
+        返回 True 表示游戏继续，False 表示游戏结束。"""
+        game = self._game()
+        player = next((p for p in game.players if p.id == player_id), None)
+        if not player:
+            return True
+        name = seat_label(player)
+
+        # 公告自爆
+        await self._announce(f"⚠️ {name} 自爆了！身份是狼人！")
+        await self._broadcast(MessageType.wolf_self_destruct, {
+            "playerId": player_id,
+            "playerName": name,
+            "playerRole": "wolf",
+        })
+        await self._broadcast(MessageType.player_update, {
+            "playerId": player_id,
+            "isAlive": False,
+            "playerName": name,
+        })
+
+        # 自爆狼人发表遗言
+        await self._announce(f"{name} 可以发表遗言")
+        await self._wait_last_words(player_id, name, timeout_seconds=self._preset_rules.get("last_words_timeout_seconds", 30))
+
+        # 警长转让
+        if game.sheriff_id == player_id:
+            await self._handle_sheriff_death(player_id)
+
+        # 清除自爆状态
+        clear_wolf_self_destruct(self.game_id)
+
+        # 检查胜负
+        game = self._game()
+        if game.winner_faction is not None:
+            await self._broadcast_game_over()
+            return False
+
+        # 跳过剩余白天流程，直接进入下一轮夜晚
+        game.current_round += 1
+        await self._announce(f"狼人自爆，跳过剩余白天流程，直接进入第{game.current_round}轮夜晚")
+
+        # 更新 AI 压缩记忆
+        self._update_round_memory({"eliminated": None, "wolf_self_destructed": player_id})
+
+        return True
+
+    def _ai_should_self_destruct(self, player) -> bool:
+        """AI 狼人决定是否自爆。
+        策略：当剩余狼人≥2且好人优势极大时，有概率自爆打断发言。"""
+        game = self._game()
+        alive_wolves = [p for p in game.players if p.is_alive and SKILL_REGISTRY[p.role].faction == "wolf"]
+        alive_non_wolves = [p for p in game.players if p.is_alive and SKILL_REGISTRY[p.role].faction != "wolf"]
+
+        # 只剩1只狼时不自爆（自爆就输了）
+        if len(alive_wolves) <= 1:
+            return False
+
+        # 好人数量远超狼人时考虑自爆
+        if len(alive_non_wolves) >= len(alive_wolves) * 3:
+            return random.random() < 0.08  # 8%概率
+
+        # 默认很低概率自爆
+        return random.random() < 0.02  # 2%概率
+
+    # ------------------------------------------------------------------
     #  白天阶段
     # ------------------------------------------------------------------
 
     async def day_phase(self) -> bool:
-        """执行白天阶段（公告 → 遗言 → 发言 → 投票）。返回 True 继续，False 结束。"""
+        """执行白天阶段（公告 → 遗言 → 警长竞选(首日) → 发言 → 投票）。返回 True 继续，False 结束。"""
         game = self._game()
 
         # 天亮公告
@@ -474,20 +1174,15 @@ class Judge:
         await self._announce("天亮了")
 
         # ── 汇总昨晚死亡/平安夜公告 ──
-        # 从 night_result 提取信息
+        # 暗牌场：平安夜不显示原因（防止推断身份）
         night_result_data = getattr(self, '_last_night_result', None)
         if night_result_data:
-            killed_id = night_result_data.get("killed_player_id")
-            guard_blocked = night_result_data.get("guard_blocked", False)
-            if killed_id:
-                killed_player = next((p for p in game.players if p.id == killed_id), None)
-                name = f"{killed_player.seat_number}号({killed_player.name})" if killed_player else "某玩家"
-                if guard_blocked:
-                    await self._announce(f"昨夜是平安夜（守卫成功守住对 {name} 的袭击）")
-                else:
+            all_killed = night_result_data.get("all_killed_ids", [])
+            if all_killed:
+                for killed_id in all_killed:
+                    killed_player = next((p for p in game.players if p.id == killed_id), None)
+                    name = f"{killed_player.seat_number}号({killed_player.name})" if killed_player else "某玩家"
                     await self._announce(f"昨夜，{name} 被杀害")
-            elif guard_blocked:
-                await self._announce("昨夜是平安夜（守卫成功守住袭击）")
             else:
                 await self._announce("昨夜是平安夜")
 
@@ -502,6 +1197,18 @@ class Judge:
                 await self._announce(msg)
 
         await asyncio.sleep(1.5)
+
+        # ── 警长死亡处理：如果警长在夜间被杀，转让徽章 ──
+        if night_result_data:
+            killed_id = night_result_data.get("killed_player_id")
+            if killed_id and game.sheriff_id == killed_id:
+                await self._handle_sheriff_death(killed_id)
+
+        # ── 警长竞选（仅第一轮白天） ──
+        if game.current_round == 1 and game.sheriff_id is None:
+            continue_game = await self.sheriff_election_phase()
+            if not continue_game:
+                return False
 
         # 发言阶段
         continue_game = await self.speak_phase()
@@ -539,6 +1246,11 @@ class Judge:
             if game.winner_faction is not None:
                 return False
 
+            # 检查狼人自爆
+            if game.wolf_self_destructed:
+                continue_game = await self._handle_wolf_self_destruct(game.wolf_self_destructed)
+                return continue_game
+
             game.current_speaker_id = speaker_id
             game.speak_turn_submitted = False
             speaker = next((p for p in game.players if p.id == speaker_id), None)
@@ -558,6 +1270,11 @@ class Judge:
             if speaker and speaker.is_ai:
                 # AI 发言
                 logger.info("[Judge] game=%s AI玩家 %s 发言中...", self.game_id, speaker.name)
+                # AI 狼人可能在此自爆
+                if self._ai_should_self_destruct(speaker):
+                    wolf_self_destruct(self.game_id, speaker.id)
+                    continue_game = await self._handle_wolf_self_destruct(speaker.id)
+                    return continue_game
                 speech = await _generate_ai_speech(self.game_id, speaker.id)
                 record_speak(self.game_id, speaker.id, speech)
                 await self._broadcast(MessageType.ai_speak, {
@@ -568,7 +1285,7 @@ class Judge:
                 })
                 await asyncio.sleep(0.2)
             else:
-                # 真人发言：等待超时
+                # 真人发言：等待超时，期间检查狼人自爆
                 game_ref = self._game()
                 speak_timeout = game_ref.room_settings.scene.speak_timeout_seconds
                 end_time = asyncio.get_running_loop().time() + speak_timeout
@@ -576,6 +1293,10 @@ class Judge:
                     current_game = self._game()
                     if current_game.speak_turn_submitted:
                         break
+                    # 检查真人狼人自爆
+                    if current_game.wolf_self_destructed:
+                        continue_game = await self._handle_wolf_self_destruct(current_game.wolf_self_destructed)
+                        return continue_game
                     await asyncio.sleep(0.25)
 
             clear_deadline(self.game_id)
@@ -613,14 +1334,36 @@ class Judge:
             })
             await asyncio.sleep(0.2)
 
-        # 等待真人投票
-        await asyncio.sleep(settings.ai_vote_window_seconds)
+        # 等待真人投票（轮询检查是否全部完成，超时上限 vote_timeout）
+        # 同时检查狼人自爆
+        human_voters = [
+            p for p in game.players
+            if not p.is_ai and p.is_alive and not p.vote_immunity_used
+        ]
+        voted_ids = {str(v.get("voterId", "")) for v in self._game().votes}
+        all_human_voted = all(p.id in voted_ids for p in human_voters)
+
+        end_time = asyncio.get_running_loop().time() + vote_timeout
+        while not all_human_voted and asyncio.get_running_loop().time() < end_time:
+            await asyncio.sleep(0.5)
+            current_game = self._game()
+            # 检查狼人自爆
+            if current_game.wolf_self_destructed:
+                continue_game = await self._handle_wolf_self_destruct(current_game.wolf_self_destructed)
+                return continue_game
+            voted_ids = {str(v.get("voterId", "")) for v in current_game.votes}
+            all_human_voted = all(p.id in voted_ids for p in human_voters)
 
         # 结算投票
         clear_deadline(self.game_id)
         vote_tie_rule = self._preset_rules.get("vote_tie_rule", "no_elimination")
         result = resolve_vote_round(self.game_id, vote_tie_rule=vote_tie_rule)
-        return await self._announce_vote_result(result)
+        continue_game = await self._announce_vote_result(result)
+        if not continue_game:
+            return False
+        # 猎人开枪（如果猎人被投票放逐）
+        continue_game = await self._handle_hunter_shoot()
+        return continue_game
 
     async def _announce_vote_result(self, result: dict[str, Any]) -> bool:
         """公布投票结果。返回 True 继续，False 结束。"""
@@ -704,6 +1447,9 @@ class Judge:
             if allow_last_words:
                 await self._announce(f"{name} 可以发表遗言")
                 await self._wait_last_words(eliminated_id, name, timeout_seconds=self._preset_rules.get("last_words_timeout_seconds", 30))
+            # 警长被放逐：转让徽章
+            if eliminated and game.sheriff_id == eliminated_id:
+                await self._handle_sheriff_death(eliminated_id)
         elif idiot_immunity and eliminated_id_for_detail:
             # 白痴翻牌免疫
             immune_player = next(
