@@ -121,10 +121,13 @@ const roleLabels = ROLE_LABELS;
 /** 狼人队友（从后端推送的 teammates 数据） */
 const teammates = computed(() => props.teammateSeats ?? []);
 
-/** 目标玩家：仅存活的玩家，默认排除自己 */
-const targetPlayers = computed(() =>
-  props.players.filter((p) => p.isAlive && p.id !== props.currentPlayerId),
-);
+/** 目标玩家：仅存活的玩家，狼人可以选自己（自刀） */
+const targetPlayers = computed(() => {
+  const canTargetSelf = props.role === 'wolf';
+  return props.players.filter(
+    (p) => p.isAlive && (canTargetSelf || p.id !== props.currentPlayerId),
+  );
+});
 
 /** 查验结果显示（仅预言家） */
 const checkResult = computed(() => {

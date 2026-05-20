@@ -10,6 +10,7 @@ export interface SceneConfig {
   description: string;
   playerCount: number;
   speakTimeoutSeconds: number;
+  rules?: Record<string, unknown>;
 }
 
 export interface AiConfigForm {
@@ -124,6 +125,7 @@ export interface GameSnapshot {
   myRole: RoleType;
   nightActionRequired: boolean;
   roomSettings: RoomSettings;
+  ownerPlayerId?: string;
 }
 
 export interface SocketMessage<TPayload = Record<string, unknown>> {

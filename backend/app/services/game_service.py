@@ -16,10 +16,11 @@ from app.utils.time import utc_now_iso
 from app.utils.ids import generate_game_id, generate_player_id
 
 
-def _check_win_condition(game: "GameState") -> str | None:
+def _check_win_condition(game: "GameState", win_condition: str = "slaughter_edge") -> str | None:
     """检查胜负条件，返回胜利阵营或 None。
     使用角色技能注册表判断阵营，支持动态角色组合。
-    规则：狼人全灭→好人胜；平民全灭→狼人胜（屠民）；神职全灭→狼人胜（屠神）。
+    win_condition 规则：
+      - slaughter_edge: 狼人全灭→好人胜；平民全灭→狼人胜（屠民）；神职全灭→狼人胜（屠神）
     """
     alive_wolves = [p for p in game.players if p.is_alive and SKILL_REGISTRY[p.role].faction == "wolf"]
     alive_civilians = [p for p in game.players if p.is_alive and p.role == RoleType.civilian]
@@ -32,10 +33,14 @@ def _check_win_condition(game: "GameState") -> str | None:
 
     if not alive_wolves:
         return "civilian"
-    if not alive_civilians:
-        return "wolf"  # 屠民
-    if not alive_gods:
-        return "wolf"  # 屠神
+
+    if win_condition == "slaughter_edge":
+        if not alive_civilians:
+            return "wolf"  # 屠民
+        if not alive_gods:
+            return "wolf"  # 屠神
+    # 未来可扩展其他 win_condition
+
     return None
 
 
@@ -99,6 +104,7 @@ class GameState:
     speak_order: list[str] = field(default_factory=list)
     speak_turn_submitted: bool = False
     room_settings: RoomRuntimeSettings = field(default_factory=_default_room_settings)
+    deadline: str | None = None  # ISO 8601 UTC 时间戳，null 表示无活跃计时器
 
 
 _GAMES: Dict[str, GameState] = {}
@@ -112,9 +118,16 @@ def _build_ai_players(count: int) -> list[Player]:
 
 
 def _assign_seat_numbers(players: list[Player]) -> None:
-    """按列表顺序分配座位号（1~N），AI提示词和发言统一使用座位号"""
-    for i, p in enumerate(players, start=1):
-        p.seat_number = i
+    """分配座位号：已选座的玩家保留座位，只给 seat_number==0 的玩家（AI）分配。"""
+    occupied = {p.seat_number for p in players if p.seat_number > 0}
+    next_available = 1
+    for p in players:
+        if p.seat_number == 0:
+            while next_available in occupied:
+                next_available += 1
+            p.seat_number = next_available
+            occupied.add(next_available)
+            next_available += 1
 
 
 def seat_label(player: Player) -> str:
@@ -169,10 +182,7 @@ def _snapshot(game: GameState, player_id: str, my_role: RoleType = RoleType.unkn
             safe_players.append(Player(
                 id=p.id,
                 name=p.name,
-<<<<<<< HEAD
                 seat_number=p.seat_number,
-=======
->>>>>>> d0960c3afea4069bbb61c2a39010d4d7eeeb5f6b
                 role=RoleType.unknown,
                 is_ai=p.is_ai,
                 is_alive=p.is_alive,
@@ -192,16 +202,23 @@ def _snapshot(game: GameState, player_id: str, my_role: RoleType = RoleType.unkn
         my_role=my_role,
         night_action_required=night_action_required,
         room_settings=_room_settings_view(game.room_settings),
+        owner_player_id=game.owner_player_id,
     )
 
 
-def _alive_speak_order(game: GameState) -> list[str]:
-    return [player.id for player in game.players if player.is_alive]
+def _alive_speak_order(game: "GameState", speak_order_rule: str = "by_seat") -> list[str]:
+    """根据规则生成发言顺序。by_seat=按座位号, by_random=随机"""
+    alive = [p for p in game.players if p.is_alive]
+    if speak_order_rule == "by_random":
+        random.shuffle(alive)
+    else:
+        alive.sort(key=lambda p: p.seat_number)
+    return [p.id for p in alive]
 
 
-def begin_speak_turn(game_id: str) -> str | None:
+def begin_speak_turn(game_id: str, speak_order_rule: str = "by_seat") -> str | None:
     game = _get_game_or_raise(game_id)
-    game.speak_order = _alive_speak_order(game)
+    game.speak_order = _alive_speak_order(game, speak_order_rule)
     game.current_speaker_id = game.speak_order[0] if game.speak_order else None
     game.speak_turn_submitted = False
     return game.current_speaker_id
@@ -265,22 +282,77 @@ def _assign_roles(players: Iterable[Player], preset: str = "six-player-dark") ->
 def create_game(player_name: str) -> GameSnapshot:
     game_id = generate_game_id()
     owner_player_id = generate_player_id()
-    players = [Player(id=owner_player_id, name=player_name, role=RoleType.unknown)]
+    players = [Player(id=owner_player_id, name=player_name, seat_number=1, role=RoleType.unknown)]
     _GAMES[game_id] = GameState(game_id=game_id, players=players, owner_player_id=owner_player_id)
     return _snapshot(_GAMES[game_id], owner_player_id)
 
 
-def join_game(game_id: str, player_name: str) -> GameSnapshot:
+def join_game(game_id: str, player_name: str, preferred_seat: int | None = None) -> GameSnapshot:
     game = _get_game_or_raise(game_id)
     if game.started:
         raise AppError("游戏已开始，无法加入", status_code=409)
-    if len(game.players) >= game.room_settings.scene.player_count:
+
+    max_seats = game.room_settings.scene.player_count
+    if len(game.players) >= max_seats:
         raise AppError("房间已满", status_code=409)
 
+    # 验证/分配座位
+    occupied = {p.seat_number for p in game.players if p.seat_number > 0}
+    if preferred_seat is not None:
+        if preferred_seat < 1 or preferred_seat > max_seats:
+            raise AppError(f"座位号必须在 1~{max_seats} 之间", status_code=400)
+        if preferred_seat in occupied:
+            raise AppError(f"{preferred_seat}号座位已被占用", status_code=409)
+    else:
+        # 自动分配：第一个空座
+        preferred_seat = next((s for s in range(1, max_seats + 1) if s not in occupied), None)
+        if preferred_seat is None:
+            raise AppError("没有可用座位", status_code=409)
+
     player_id = generate_player_id()
-    game.players.append(Player(id=player_id, name=player_name, role=RoleType.unknown))
-    game.announcements.append(f"{player_name} 加入房间")
+    game.players.append(Player(
+        id=player_id, name=player_name, seat_number=preferred_seat, role=RoleType.unknown,
+    ))
+    game.announcements.append(f"{player_name} 加入房间，坐在 {preferred_seat}号")
     return _snapshot(game, player_id)
+
+
+def change_seat(game_id: str, player_id: str, seat_number: int) -> GameSnapshot:
+    """在房间内换座位"""
+    game = _get_game_or_raise(game_id)
+    if game.started:
+        raise AppError("游戏已开始，无法换座", status_code=409)
+
+    max_seats = game.room_settings.scene.player_count
+    if seat_number < 1 or seat_number > max_seats:
+        raise AppError(f"座位号必须在 1~{max_seats} 之间", status_code=400)
+
+    player = next((p for p in game.players if p.id == player_id), None)
+    if player is None:
+        raise AppError("玩家不存在", status_code=404)
+
+    occupied = {p.seat_number for p in game.players if p.seat_number > 0 and p.id != player_id}
+    if seat_number in occupied:
+        raise AppError(f"{seat_number}号座位已被占用", status_code=409)
+
+    player.seat_number = seat_number
+    return _snapshot(game, player_id)
+
+
+def set_deadline(game_id: str, timeout_seconds: float) -> str:
+    """为当前计时阶段设置截止时间。返回 ISO 8601 UTC 时间戳。"""
+    from datetime import datetime, timezone, timedelta
+    game = _get_game_or_raise(game_id)
+    deadline_dt = datetime.now(timezone.utc) + timedelta(seconds=timeout_seconds)
+    deadline_iso = deadline_dt.isoformat()
+    game.deadline = deadline_iso
+    return deadline_iso
+
+
+def clear_deadline(game_id: str) -> None:
+    """清除截止时间"""
+    game = _get_game_or_raise(game_id)
+    game.deadline = None
 
 
 def get_game(game_id: str, requester_id: str | None = None) -> GameSnapshot:
@@ -350,8 +422,13 @@ def list_ai_players(game_id: str) -> list[Player]:
     return [player for player in game.players if player.is_ai and player.is_alive]
 
 
-def start_game(game_id: str) -> GameSnapshot:
+def start_game(game_id: str, requester_id: str | None = None) -> GameSnapshot:
     game = _get_game_or_raise(game_id)
+
+    # 房主校验
+    if requester_id and requester_id != game.owner_player_id:
+        raise AppError("只有房主可以开始游戏", status_code=403)
+
     if game.started:
         return _snapshot(game, game.owner_player_id, game.players[0].role if game.players else RoleType.unknown)
     target_players = game.room_settings.scene.player_count
@@ -454,8 +531,11 @@ def record_night_action(game_id: str, player_id: str, target_id: str) -> None:
 
 
 def get_night_targets(game_id: str, player_id: str) -> list[Player]:
-    """Return alive targets for night action."""
+    """Return alive targets for night action. Includes self if can_target_self."""
     game = _get_game_or_raise(game_id)
+    player = next((p for p in game.players if p.id == player_id), None)
+    if player and SKILL_REGISTRY[player.role].can_target_self:
+        return [p for p in game.players if p.is_alive]
     return [p for p in game.players if p.is_alive and p.id != player_id]
 
 
@@ -464,6 +544,7 @@ def resolve_night(game_id: str) -> dict[str, object]:
     mark killed players, reset night_action_done, clear night_actions.
     Returns {killed_player_id: str | None, checked_results: list}.
     """
+    from app.domain.roles import get_preset_rule
     game = _get_game_or_raise(game_id)
 
     # --- Wolf kill: majority vote among wolves ---
@@ -531,7 +612,8 @@ def resolve_night(game_id: str) -> dict[str, object]:
     game.night_actions.clear()
 
     # --- Check win condition ---
-    winner = _check_win_condition(game)
+    win_condition = get_preset_rule(game.room_settings.scene.preset, "win_condition")
+    winner = _check_win_condition(game, win_condition)
     if winner:
         game.winner_faction = winner
         game.game_status = GameStatus.end
@@ -544,8 +626,13 @@ def resolve_night(game_id: str) -> dict[str, object]:
     }
 
 
-def resolve_vote_round(game_id: str) -> dict[str, object]:
+def resolve_vote_round(game_id: str, vote_tie_rule: str = "no_elimination") -> dict[str, object]:
+    from app.domain.roles import get_preset_rule
     game = _get_game_or_raise(game_id)
+    # 如果未显式传入 vote_tie_rule，从预设读取
+    if vote_tie_rule == "no_elimination":
+        vote_tie_rule = get_preset_rule(game.room_settings.scene.preset, "vote_tie_rule")
+
     if not game.votes:
         game.current_speaker_id = None
         game.speak_order.clear()
@@ -562,7 +649,17 @@ def resolve_vote_round(game_id: str) -> dict[str, object]:
         max_votes = max(tally.values())
         top_candidates = [tid for tid, count in tally.items() if count == max_votes]
         if len(top_candidates) > 1:
-            # 平票，无人出局
+            # 平票处理：根据 vote_tie_rule 决定
+            if vote_tie_rule == "no_elimination":
+                game.votes.clear()
+                game.current_round += 1
+                game.current_speaker_id = None
+                game.speak_order.clear()
+                game.speak_turn_submitted = False
+                game.announcements.append("投票平票，无人出局")
+                game.game_status = GameStatus.night
+                return {"eliminated": None, "winnerFaction": game.winner_faction, "gameStatus": game.game_status, "currentRound": game.current_round}
+            # 未来: re_vote / both_eliminated
             game.votes.clear()
             game.current_round += 1
             game.current_speaker_id = None
@@ -586,7 +683,8 @@ def resolve_vote_round(game_id: str) -> dict[str, object]:
     game.speak_order.clear()
     game.speak_turn_submitted = False
 
-    winner = _check_win_condition(game)
+    win_condition = get_preset_rule(game.room_settings.scene.preset, "win_condition")
+    winner = _check_win_condition(game, win_condition)
     if winner:
         game.winner_faction = winner
         game.game_status = GameStatus.end

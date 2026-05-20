@@ -82,19 +82,12 @@ class StructuredMemory:
     """key-value 形式的核心事实，token 极低"""
     # player_id -> "活,角色" / "死,角色"
     player_status: dict[str, str] = field(default_factory=dict)
-<<<<<<< HEAD
     # 关键事件列表：["N1：刀5号，守卫守5号", "D1：放逐3号(狼)"]
     key_events: list[str] = field(default_factory=list)
     # 指控链：["1号→3号(查杀)", "3号→1号(查杀)"]
     accusation_chain: list[str] = field(default_factory=list)
     # 座位号映射：player_id -> seat_number
     seat_map: dict[str, int] = field(default_factory=dict)
-=======
-    # 关键事件列表：["N1：刀5，守卫守5", "D1：放逐3(狼)"]
-    key_events: list[str] = field(default_factory=list)
-    # 指控链：["1→3(查杀)", "3→1(查杀)"]
-    accusation_chain: list[str] = field(default_factory=list)
->>>>>>> d0960c3afea4069bbb61c2a39010d4d7eeeb5f6b
 
     def update_player(self, player_id: str, alive: bool, role_hint: str = "") -> None:
         status = ("活" if alive else "死") + (f",{role_hint}" if role_hint else "")
@@ -109,15 +102,11 @@ class StructuredMemory:
     def format(self) -> str:
         parts: list[str] = []
         if self.player_status:
-<<<<<<< HEAD
             # 用座位号显示，如"3号(活,狼(队友))"
             status_lines = []
             for pid, s in self.player_status.items():
                 seat = self.seat_map.get(pid, pid)
                 status_lines.append(f"  {seat}号({s})")
-=======
-            status_lines = [f"  {pid}({s})" for pid, s in self.player_status.items()]
->>>>>>> d0960c3afea4069bbb61c2a39010d4d7eeeb5f6b
             parts.append("【玩家状态】\n" + " ".join(status_lines))
         if self.key_events:
             parts.append("【关键事件】\n" + "\n".join(f"  {e}" for e in self.key_events[-10:]))
@@ -319,12 +308,9 @@ def update_structured_memory_from_game(
 ) -> None:
     """从游戏状态同步结构化记忆中的玩家状态"""
     for p in players:
-<<<<<<< HEAD
         # 同步座位号映射
         if hasattr(p, 'seat_number') and p.seat_number:
             store.structured_memory.seat_map[p.id] = p.seat_number
-=======
->>>>>>> d0960c3afea4069bbb61c2a39010d4d7eeeb5f6b
         # AI 玩家能看到的角色信息取决于自身角色
         role_hint = ""
         if store.role == RoleType.wolf and p.role == RoleType.wolf and p.id != store.player_id:

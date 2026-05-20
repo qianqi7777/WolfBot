@@ -11,10 +11,7 @@ import type {
   Player,
   RoleType,
   VoteData,
-<<<<<<< HEAD
   VoteSummaryPayload,
-=======
->>>>>>> d0960c3afea4069bbb61c2a39010d4d7eeeb5f6b
   AiConfigForm,
 } from '@/types/game';
 
@@ -37,6 +34,8 @@ export interface GameState {
   nightResult: NightResultPayload | null;
   wolfTeammates: string[];
   roomSettings: RoomSettings;
+  ownerPlayerId: string | null;
+  deadline: string | null;
 }
 
 const SESSION_GAME_ID_KEY = 'wolfbot.gameId';
@@ -142,10 +141,13 @@ export const useGameStore = defineStore('game', {
     nightResult: null,
     wolfTeammates: [],
     roomSettings: createDefaultRoomSettings(),
+    ownerPlayerId: null,
+    deadline: null,
   }),
   getters: {
     alivePlayers: (state) => state.players.filter((player) => player.isAlive),
     selfPlayer: (state) => state.players.find((player) => player.id === state.myId) ?? null,
+    isOwner: (state) => state.ownerPlayerId !== null && state.myId === state.ownerPlayerId,
   },
   actions: {
     restoreSession() {
@@ -169,6 +171,7 @@ export const useGameStore = defineStore('game', {
       this.myRole = snapshot.myRole;
       this.nightActionRequired = snapshot.nightActionRequired ?? false;
       this.roomSettings = snapshot.roomSettings;
+      if (snapshot.ownerPlayerId) this.ownerPlayerId = snapshot.ownerPlayerId;
       saveSession(this.gameId, this.myId);
     },
     setRoomSettings(roomSettings: RoomSettings) {
@@ -229,6 +232,9 @@ export const useGameStore = defineStore('game', {
     setVoteSummary(summary: VoteSummaryPayload) {
       this.voteSummary = summary;
     },
+    setDeadline(deadline: string | null) {
+      this.deadline = deadline;
+    },
     addAnnounce(content: string) {
       this.announceList.push({
         id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
@@ -275,6 +281,8 @@ export const useGameStore = defineStore('game', {
       this.nightResult = null;
       this.wolfTeammates = [];
       this.roomSettings = createDefaultRoomSettings();
+      this.ownerPlayerId = null;
+      this.deadline = null;
       clearSession();
     },
   },

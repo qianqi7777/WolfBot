@@ -13,6 +13,12 @@ class CreateGameRequest(BaseSchema):
 
 class JoinGameRequest(BaseSchema):
     player_name: str = Field(alias="playerName", min_length=1, max_length=30)
+    preferred_seat: int | None = Field(default=None, alias="preferredSeat", ge=1)
+
+
+class ChangeSeatRequest(BaseSchema):
+    player_id: str = Field(alias="playerId", min_length=1)
+    seat_number: int = Field(alias="seatNumber", ge=1)
 
 
 class SpeakRequest(BaseSchema):
@@ -35,11 +41,12 @@ class SceneConfig(BaseSchema):
     player_count: int = Field(default=6, alias="playerCount", ge=2, le=18)
     speak_timeout_seconds: int = Field(default=15, alias="speakTimeoutSeconds", ge=5, le=120,
                                         description="每人发言轮次的超时时间（秒）")
+    rules: dict[str, Any] | None = Field(default=None, alias="rules")
 
     @model_validator(mode="before")
     @classmethod
     def sync_preset_to_fields(cls, data: Any) -> Any:
-        """根据 preset 自动填充 name/description/playerCount"""
+        """根据 preset 自动填充 name/description/playerCount/rules"""
         from app.domain.roles import SCENE_PRESETS
         if isinstance(data, dict):
             preset_id = data.get("preset") or data.get("preset_id")
@@ -50,6 +57,8 @@ class SceneConfig(BaseSchema):
                 if "description" not in data:
                     data["description"] = p.description
                 data["playerCount"] = p.player_count
+                if "rules" not in data or data.get("rules") is None:
+                    data["rules"] = p.rules
         return data
 
 
@@ -101,6 +110,7 @@ class GameSnapshot(BaseSchema):
     my_role: RoleType = RoleType.unknown
     night_action_required: bool = False
     room_settings: RoomSettings
+    owner_player_id: str | None = Field(default=None, alias="ownerPlayerId")
 
 
 class NightActionRequest(BaseSchema):

@@ -12,8 +12,10 @@ export async function createGame(playerName = '玩家'): Promise<GameSnapshot> {
   return data;
 }
 
-export async function joinGame(gameId: string, playerName = '玩家'): Promise<GameSnapshot> {
-  const { data } = await api.post<GameSnapshot>(`/api/games/${gameId}/join`, { playerName });
+export async function joinGame(gameId: string, playerName = '玩家', preferredSeat?: number): Promise<GameSnapshot> {
+  const payload: Record<string, unknown> = { playerName };
+  if (preferredSeat !== undefined) payload.preferredSeat = preferredSeat;
+  const { data } = await api.post<GameSnapshot>(`/api/rooms/${gameId}/join`, payload);
   return data;
 }
 
@@ -29,8 +31,14 @@ export async function getRoom(gameId: string, playerId?: string): Promise<GameSn
   return data;
 }
 
-export async function startGame(gameId: string): Promise<GameSnapshot> {
-  const { data } = await api.post<GameSnapshot>(`/api/games/${gameId}/start`);
+export async function changeSeat(gameId: string, playerId: string, seatNumber: number): Promise<GameSnapshot> {
+  const { data } = await api.put<GameSnapshot>(`/api/rooms/${gameId}/seat`, { playerId, seatNumber });
+  return data;
+}
+
+export async function startGame(gameId: string, playerId?: string): Promise<GameSnapshot> {
+  const params = playerId ? { params: { playerId } } : undefined;
+  const { data } = await api.post<GameSnapshot>(`/api/rooms/${gameId}/start`, null, params);
   return data;
 }
 

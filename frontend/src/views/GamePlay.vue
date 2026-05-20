@@ -3,6 +3,10 @@
     <!-- 左栏：操作区 -->
     <div class="game-left">
       <GameStatus :status="store.gameStatus" :round="store.currentRound" />
+      <CountdownTimer
+        :deadline="store.deadline"
+        :total-seconds="currentPhaseTimeout"
+      />
       <RoleCard :role="store.myRole" />
       <el-alert
         v-if="currentSpeakerName"
@@ -22,7 +26,6 @@
         :current-player-id="store.myId"
         @submit="submitVote"
       />
-<<<<<<< HEAD
       <!-- 投票结果明细展示 -->
       <el-card v-if="voteSummaryDisplay" class="vote-summary-card" shadow="always">
         <template #header>投票结果</template>
@@ -46,15 +49,12 @@
           </div>
         </div>
       </el-card>
-=======
->>>>>>> d0960c3afea4069bbb61c2a39010d4d7eeeb5f6b
       <NightAction
         v-if="showNightAction"
         :role="store.myRole"
         :players="store.alivePlayers"
         :current-player-id="store.myId"
         :night-result="store.nightResult"
-<<<<<<< HEAD
         :teammate-seats="store.wolfTeammates"
         @submit="submitNightActionHandler"
       />
@@ -68,10 +68,6 @@
           :closable="false"
         />
       </el-card>
-=======
-        @submit="submitNightActionHandler"
-      />
->>>>>>> d0960c3afea4069bbb61c2a39010d4d7eeeb5f6b
     </div>
     <!-- 右栏：信息流 -->
     <div class="game-right">
@@ -90,6 +86,7 @@ import { isAxiosError } from 'axios';
 import { submitSpeak as apiSpeak, submitVote as apiVote, submitNightAction as apiNightAction } from '@/api/gameApi';
 import Announce from '@/components/common/Announce.vue';
 import ChatBox from '@/components/common/ChatBox.vue';
+import CountdownTimer from '@/components/common/CountdownTimer.vue';
 import NightAction from '@/components/common/NightAction.vue';
 import VotePanel from '@/components/common/VotePanel.vue';
 import RoleCard from '@/components/common/RoleCard.vue';
@@ -106,6 +103,7 @@ const { canPlayerSpeak, canPlayerVote, canPlayerNightAction } = useGameLogic();
 const router = useRouter();
 
 const selfPlayer = computed(() => store.selfPlayer);
+const currentPhaseTimeout = computed(() => store.roomSettings.scene.speakTimeoutSeconds);
 const currentSpeakerName = computed(() => {
   if (!store.currentSpeakerId) {
     return '';
@@ -235,7 +233,6 @@ onUnmounted(() => {
   overflow-y: auto;
 }
 
-<<<<<<< HEAD
 .prophet-check-card {
   animation: fadeIn 0.3s ease;
 }
@@ -288,8 +285,6 @@ onUnmounted(() => {
   to { opacity: 1; transform: translateY(0); }
 }
 
-=======
->>>>>>> d0960c3afea4069bbb61c2a39010d4d7eeeb5f6b
 @media (max-width: 768px) {
   .game-layout {
     grid-template-columns: 1fr;

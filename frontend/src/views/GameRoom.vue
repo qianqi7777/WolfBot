@@ -85,13 +85,30 @@
           />
         </el-form>
       </el-card>
-      <player-list :players="store.players" />
+      <!-- 座位选择 -->
+      <SeatMap
+        :players="store.players"
+        :player-count="settingsForm.scene.playerCount"
+        :my-id="store.myId"
+        :disabled="store.started"
+        @select-seat="handleSeatSelect"
+      />
       <el-card>
         <template #header>房间 {{ gameId }}</template>
-        <p>{{ store.started ? '对局已开始，正在等待进入对局页。' : '等待玩家加入，或直接开局由系统按 6 人场补足 AI。' }}</p>
+        <p>{{ store.started ? '对局已开始，正在等待进入对局页。' : '选择座位后等待房主开始对局，或由房主直接开始。' }}</p>
         <el-space>
           <el-button type="primary" @click="goGame">进入对局页</el-button>
-          <el-button v-if="!store.started" type="success" :loading="loading" @click="startRoom">开始对局</el-button>
+          <el-button
+            v-if="!store.started && store.isOwner"
+            type="success"
+            :loading="loading"
+            @click="startRoom"
+          >
+            开始对局
+          </el-button>
+          <el-tag v-if="!store.started && !store.isOwner" type="info">
+            等待房主开始对局...
+          </el-tag>
           <el-button :loading="loading" @click="refreshRoom">刷新房间</el-button>
           <el-tag :type="isConnected ? 'success' : 'warning'">
             {{ isConnected ? 'WebSocket 已连接' : 'WebSocket 未连接' }}
@@ -108,9 +125,9 @@ import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { isAxiosError } from 'axios';
 
-import { getRoom, startGame, testRoomAiConnection, updateRoomSettings } from '@/api/gameApi';
+import { changeSeat, getRoom, startGame, testRoomAiConnection, updateRoomSettings } from '@/api/gameApi';
 import GameStatus from '@/components/game/GameStatus.vue';
-import PlayerList from '@/components/game/PlayerList.vue';
+import SeatMap from '@/components/game/SeatMap.vue';
 import { useGameSocket } from '@/hooks/useGameSocket';
 import { useGameStore, saveAiConfigToLocal, getSavedAiConfig } from '@/store/modules/gameStore';
 import { SCENE_PRESET_OPTIONS } from '@/utils/constants';
@@ -183,6 +200,15 @@ const refreshRoom = async () => {
   }
 };
 
+const handleSeatSelect = async (seatNumber: number) => {
+  try {
+    const snapshot = await changeSeat(props.gameId, store.myId, seatNumber);
+    store.applySnapshot(snapshot, store.myId || snapshot.playerId);
+  } catch {
+    ElMessage.error('换座失败，座位可能已被占用');
+  }
+};
+
 const startRoom = async () => {
   loading.value = true;
   try {
@@ -195,11 +221,12 @@ const startRoom = async () => {
       // 设置保存失败不阻塞开局，但提示用户
       ElMessage.warning('设置保存失败，将使用上次保存的配置开局');
     }
-    const snapshot = await startGame(props.gameId);
+    const snapshot = await startGame(props.gameId, store.myId);
     store.applySnapshot(snapshot, store.myId || snapshot.playerId);
     await router.replace({ name: 'game', params: { gameId: props.gameId } });
-  } catch {
-    ElMessage.error('开局失败');
+  } catch (error) {
+    const msg = isAxiosError(error) ? String(error.response?.data?.detail ?? '开局失败') : '开局失败';
+    ElMessage.error(msg);
   } finally {
     loading.value = false;
   }

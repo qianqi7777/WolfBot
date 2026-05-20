@@ -14,9 +14,25 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass, field
-from typing import Callable
+from typing import Any, Callable
 
 from app.domain.enums import RoleType
+
+
+# ------------------------------------------------------------------
+#  场景规则默认值
+# ------------------------------------------------------------------
+
+DEFAULT_RULES: dict[str, Any] = {
+    "win_condition": "slaughter_edge",       # 屠边（屠民/屠神）
+    "speak_order": "by_seat",                # by_seat / by_random / sheriff_first
+    "max_rounds": 10,
+    "first_night_death_allowed": True,
+    "last_words_allowed": True,
+    "vote_tie_rule": "no_elimination",       # no_elimination / re_vote / both_eliminated
+    "night_action_timeout_seconds": 30,
+    "vote_timeout_seconds": 30,
+}
 
 
 # ------------------------------------------------------------------
@@ -49,7 +65,7 @@ class RoleSkill:
 
 @dataclass(frozen=True)
 class ScenePreset:
-    """场景预设 — 声明角色组合"""
+    """场景预设 — 声明角色组合与规则"""
     preset_id: str                       # 预设 ID，如 "six-player-dark"
     name: str                            # 中文名，如 "6人暗牌场"
     description: str                      # 描述
@@ -57,10 +73,15 @@ class ScenePreset:
     role_distribution: dict[RoleType, int]  # 角色分配：{RoleType: 数量}
     is_dark: bool = True                 # 是否暗牌
     has_sheriff: bool = False            # 是否有警长
+    rules: dict[str, Any] = field(default_factory=dict)  # 场景规则（覆盖 DEFAULT_RULES）
 
     @property
     def total_roles(self) -> int:
         return sum(self.role_distribution.values())
+
+    def get_rule(self, key: str) -> Any:
+        """获取规则值，优先读自身 rules，回退到 DEFAULT_RULES"""
+        return self.rules.get(key, DEFAULT_RULES.get(key))
 
 
 # ------------------------------------------------------------------
@@ -81,6 +102,7 @@ WOLF_SKILL = RoleSkill(
         "我先观察一下，目前没有明确的怀疑对象。",
         "大家注意一下发言逻辑，我觉得有人在故意引导方向。",
     ],
+    can_target_self=True,  # 狼人可以自刀（合法策略）
 )
 
 CIVILIAN_SKILL = RoleSkill(
@@ -231,6 +253,16 @@ SCENE_PRESETS: dict[str, ScenePreset] = {
         },
         is_dark=True,
         has_sheriff=False,
+        rules={
+            "win_condition": "slaughter_edge",
+            "speak_order": "by_seat",
+            "max_rounds": 10,
+            "first_night_death_allowed": True,
+            "last_words_allowed": True,
+            "vote_tie_rule": "no_elimination",
+            "night_action_timeout_seconds": 30,
+            "vote_timeout_seconds": 30,
+        },
     ),
     "nine-player-dark": ScenePreset(
         preset_id="nine-player-dark",
@@ -246,6 +278,16 @@ SCENE_PRESETS: dict[str, ScenePreset] = {
         },
         is_dark=True,
         has_sheriff=False,
+        rules={
+            "win_condition": "slaughter_edge",
+            "speak_order": "by_seat",
+            "max_rounds": 12,
+            "first_night_death_allowed": True,
+            "last_words_allowed": True,
+            "vote_tie_rule": "no_elimination",
+            "night_action_timeout_seconds": 30,
+            "vote_timeout_seconds": 30,
+        },
     ),
     "twelve-player-dark": ScenePreset(
         preset_id="twelve-player-dark",
@@ -262,6 +304,16 @@ SCENE_PRESETS: dict[str, ScenePreset] = {
         },
         is_dark=True,
         has_sheriff=True,
+        rules={
+            "win_condition": "slaughter_edge",
+            "speak_order": "by_seat",
+            "max_rounds": 15,
+            "first_night_death_allowed": True,
+            "last_words_allowed": True,
+            "vote_tie_rule": "no_elimination",
+            "night_action_timeout_seconds": 30,
+            "vote_timeout_seconds": 30,
+        },
     ),
 }
 
@@ -271,6 +323,12 @@ def get_preset(preset_id: str) -> ScenePreset:
     if preset_id not in SCENE_PRESETS:
         raise ValueError(f"未知场景预设: {preset_id}，可选: {list(SCENE_PRESETS.keys())}")
     return SCENE_PRESETS[preset_id]
+
+
+def get_preset_rule(preset_id: str, key: str) -> Any:
+    """获取场景规则值，优先读 preset.rules，回退 DEFAULT_RULES"""
+    preset = get_preset(preset_id)
+    return preset.get_rule(key)
 
 
 def build_role_list(preset_id: str) -> list[RoleType]:

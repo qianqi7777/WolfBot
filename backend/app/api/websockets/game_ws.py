@@ -5,7 +5,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from app.core.exceptions import AppError
 from app.domain.enums import MessageType
 from app.schemas.socket import SocketMessage
-from app.services.game_service import get_game, get_player_role, record_night_action, record_speak, record_vote, start_game
+from app.services.game_service import change_seat, get_game, get_game_state, get_player_role, record_night_action, record_speak, record_vote, start_game
 from app.services.ai_service import launch_ai_cycle
 from app.utils.time import utc_now_iso
 from app.websocket.broadcaster import manager
@@ -30,6 +30,7 @@ async def game_ws(websocket: WebSocket) -> None:
                     "players": [player.model_dump(by_alias=True) for player in snapshot.players],
                     "currentSpeakerId": snapshot.current_speaker_id,
                     "roomSettings": snapshot.room_settings.model_dump(by_alias=True),
+                    "ownerPlayerId": snapshot.owner_player_id,
                 },
             ).model_dump_json(),
         )
@@ -131,13 +132,42 @@ async def game_ws(websocket: WebSocket) -> None:
                             websocket,
                             SocketMessage(type=MessageType.error, timestamp=utc_now_iso(), payload={"content": exc.message}).model_dump_json(),
                         )
+            elif message_type == "change_seat":
+                seat_number = int(payload.get("seatNumber", 0))
+                if seat_number > 0 and player_id:
+                    try:
+                        cs_snapshot = change_seat(game_id, player_id, seat_number)
+                        await manager.broadcast(
+                            game_id,
+                            SocketMessage(
+                                type=MessageType.room_update,
+                                timestamp=utc_now_iso(),
+                                payload={
+                                    "gameId": game_id,
+                                    "players": [p.model_dump(by_alias=True) for p in cs_snapshot.players],
+                                },
+                            ).model_dump_json(),
+                        )
+                    except AppError as exc:
+                        await manager.send_to(
+                            websocket,
+                            SocketMessage(type=MessageType.error, timestamp=utc_now_iso(), payload={"content": exc.message}).model_dump_json(),
+                        )
             elif message_type == "ping":
                 await manager.send_to(
                     websocket,
                     SocketMessage(type=MessageType.announce, timestamp=utc_now_iso(), payload={"content": "pong"}).model_dump_json(),
                 )
             elif message_type == "start":
-                started_snapshot = start_game(game_id)
+                # 房主校验
+                game = get_game_state(game_id)
+                if game.owner_player_id and player_id != game.owner_player_id:
+                    await manager.send_to(
+                        websocket,
+                        SocketMessage(type=MessageType.error, timestamp=utc_now_iso(), payload={"content": "只有房主可以开始游戏"}).model_dump_json(),
+                    )
+                    continue
+                started_snapshot = start_game(game_id, requester_id=player_id or None)
                 launch_ai_cycle(game_id)
                 await manager.broadcast(
                     game_id,

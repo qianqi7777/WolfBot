@@ -46,3 +46,20 @@ export const SCENE_PRESET_OPTIONS: Array<{
 ];
 
 export const DEFAULT_VOTE_LIMIT = 60;
+
+// 场景规则标签
+export const WIN_CONDITION_LABELS: Record<string, string> = {
+  slaughter_edge: '屠边（屠民/屠神）',
+};
+
+export const SPEAK_ORDER_LABELS: Record<string, string> = {
+  by_seat: '按座位号',
+  by_random: '随机顺序',
+  sheriff_first: '警长发言',
+};
+
+export const VOTE_TIE_LABELS: Record<string, string> = {
+  no_elimination: '平票无人出局',
+  re_vote: '平票重新投票',
+  both_eliminated: '平票双双出局',
+};

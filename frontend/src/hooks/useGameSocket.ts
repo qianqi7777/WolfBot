@@ -224,12 +224,20 @@ export function useGameSocket() {
           if (message.payload.status !== 'speak') {
             store.setCurrentSpeakerId(null);
           }
+          // 非计时阶段清除倒计时
+          if (message.payload.status === 'day' || message.payload.status === 'end' || message.payload.status === 'waiting') {
+            store.setDeadline(null);
+          }
         }
         if (typeof message.payload?.currentRound === 'number') {
           store.setCurrentRound(message.payload.currentRound);
         }
         if (isNullableString(message.payload?.currentSpeakerId)) {
           store.setCurrentSpeakerId(message.payload.currentSpeakerId);
+        }
+        // 提取 deadline
+        if (typeof message.payload?.deadline === 'string') {
+          store.setDeadline(message.payload.deadline);
         }
         break;
       case 'role_info':
@@ -261,6 +269,9 @@ export function useGameSocket() {
           if (isNullableString(payload.currentSpeakerId)) {
             store.setCurrentSpeakerId(payload.currentSpeakerId);
           }
+          if (typeof payload.deadline === 'string') {
+            store.setDeadline(payload.deadline);
+          }
         }
         break;
       case 'vote_result':
@@ -289,6 +300,10 @@ export function useGameSocket() {
         // 狼人队友信息
         if (isRecord(message.payload) && Array.isArray(message.payload.teammates)) {
           store.setWolfTeammates(message.payload.teammates.filter((t: unknown) => typeof t === 'string'));
+        }
+        // 提取 deadline
+        if (isRecord(message.payload) && typeof message.payload.deadline === 'string') {
+          store.setDeadline(message.payload.deadline);
         }
         break;
       case 'night_result':
