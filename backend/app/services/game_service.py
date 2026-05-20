@@ -190,6 +190,7 @@ def _snapshot(game: GameState, player_id: str, my_role: RoleType = RoleType.unkn
                 is_alive=p.is_alive,
                 night_action_done=p.night_action_done,
                 last_guard_target_id=p.last_guard_target_id,
+                vote_immunity_used=p.vote_immunity_used,
             ))
 
     return GameSnapshot(
@@ -548,6 +549,9 @@ def record_vote(game_id: str, voter_id: str, target_id: str) -> None:
     voter = next((item for item in game.players if item.id == voter_id), None)
     if voter is None:
         raise AppError("玩家不存在", status_code=404)
+    # 白痴翻牌后不能投票
+    if voter.vote_immunity_used:
+        raise AppError("白痴翻牌后不能参与投票", status_code=409)
     game.votes = [vote for vote in game.votes if vote.get("voterId") != voter.id]
     if is_abstain:
         game.votes.append({"voterId": voter.id, "targetId": "abstain"})
@@ -777,8 +781,15 @@ def resolve_vote_round(game_id: str, vote_tie_rule: str = "no_elimination") -> d
         eliminated_id = None
 
     eliminated_player = next((player for player in game.players if player.id == eliminated_id), None)
+    idiot_immunity = False
     if eliminated_player is not None:
-        eliminated_player.is_alive = False
+        # 白痴翻牌免疫：被投票放逐时不死亡，但之后不能投票
+        if eliminated_player.role == RoleType.idiot and not eliminated_player.vote_immunity_used:
+            eliminated_player.vote_immunity_used = True
+            idiot_immunity = True
+            # 白痴免疫，不算淘汰，但仍记录谁被投
+        else:
+            eliminated_player.is_alive = False
         # 记录投票详情：谁投了谁，谁弃票了
         vote_detail_parts = []
         abstain_voters = []
@@ -824,7 +835,9 @@ def resolve_vote_round(game_id: str, vote_tie_rule: str = "no_elimination") -> d
         game.game_status = GameStatus.night
 
     return {
-        "eliminated": eliminated_player.id if eliminated_player else None,
+        "eliminated": eliminated_player.id if eliminated_player and not idiot_immunity else None,
+        "eliminated_id_for_detail": eliminated_player.id if eliminated_player else None,
+        "idiot_immunity": idiot_immunity,
         "winnerFaction": game.winner_faction,
         "gameStatus": game.game_status,
         "currentRound": game.current_round,

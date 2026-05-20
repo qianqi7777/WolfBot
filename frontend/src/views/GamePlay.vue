@@ -120,7 +120,7 @@ import { useGameSocket } from '@/hooks/useGameSocket';
 import { useGameStore } from '@/store/modules/gameStore';
 
 const store = useGameStore();
-const { connect, disconnect } = useGameSocket();
+const { connect, disconnect, send } = useGameSocket();
 const { canPlayerSpeak, canPlayerVote, canPlayerNightAction } = useGameLogic();
 const router = useRouter();
 
@@ -135,9 +135,15 @@ const currentSpeakerName = computed(() => {
 });
 
 const canPlayerSpeakNow = computed(
-  () =>
-    canPlayerSpeak(store.gameStatus, selfPlayer.value ?? undefined) &&
-    store.currentSpeakerId === store.myId,
+  () => {
+    // 遗言模式：当前发言者是自己（允许死亡玩家）
+    if (store.isLastWords && store.currentSpeakerId === store.myId) {
+      return true;
+    }
+    // 正常发言模式
+    return canPlayerSpeak(store.gameStatus, selfPlayer.value ?? undefined) &&
+      store.currentSpeakerId === store.myId;
+  },
 );
 
 const showNightAction = computed(
@@ -196,7 +202,13 @@ const getErrorMessage = (error: unknown, fallback: string) => {
 
 const submitSpeak = async (content: string) => {
   try {
-    await apiSpeak(store.gameId, store.myId, content);
+    if (store.isLastWords) {
+      // 遗言通过 WebSocket 发送 last_words 消息类型
+      send({ type: 'last_words', payload: { content } });
+      store.setIsLastWords(false);
+    } else {
+      await apiSpeak(store.gameId, store.myId, content);
+    }
   } catch (error) {
     ElMessage.error(getErrorMessage(error, '提交发言失败'));
   }

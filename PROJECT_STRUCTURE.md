@@ -1,7 +1,7 @@
 # WolfBot 项目结构与开发参考
 
 > AI 狼人杀 Web 游戏 — 全栈项目结构速查手册
-> 最后更新：2026-05-20（第二批功能增强）
+> 最后更新：2026-05-20（第五批：Bug修复 + 12人标准场）
 
 ---
 
@@ -155,6 +155,7 @@ class RoleType(str, Enum):
     guard = "guard"         # 守卫
     hunter = "hunter"       # 猎人
     witch = "witch"         # 女巫
+    idiot = "idiot"         # 白痴
     unknown = "unknown"     # 未知（视角隔离）
 
 class MessageType(str, Enum):
@@ -175,6 +176,7 @@ class MessageType(str, Enum):
     role_select_start = "role_select_start"   # 抢身份阶段开始
     role_select_choice = "role_select_choice"  # 抢身份选择（客户端→服务端）
     role_select_result = "role_select_result"  # 抢身份结果
+    last_words = "last_words"             # 遗言
     error = "error"                       # 错误消息
 ```
 
@@ -184,8 +186,8 @@ class MessageType(str, Enum):
 // src/types/game.ts
 
 type GameStatus = 'waiting' | 'role_select' | 'night' | 'day' | 'speak' | 'vote' | 'end';
-type RoleType = 'wolf' | 'civilian' | 'prophet' | 'guard' | 'hunter' | 'witch' | 'unknown';
-type ScenePreset = 'six-player-dark' | 'nine-player-dark' | 'twelve-player-dark';
+type RoleType = 'wolf' | 'civilian' | 'prophet' | 'guard' | 'hunter' | 'witch' | 'idiot' | 'unknown';
+type ScenePreset = 'six-player-dark' | 'nine-player-dark' | 'twelve-player-dark' | 'twelve-player-standard-dark';
 type GameMode = 'classic' | 'role_select';
 
 interface Player {
@@ -303,6 +305,7 @@ judge_service.run_game()
 | `vote` | `{ targetId, playerId }` | 投票（targetId="abstain" 为弃票） |
 | `night_action` | `{ targetId, playerId }` | 夜间行动 |
 | `role_select_choice` | `{ role, playerId }` | 抢身份选择 |
+| `last_words` | `{ content }` | 遗言 |
 
 ### 5.2 服务端 → 客户端
 
@@ -322,6 +325,7 @@ judge_service.run_game()
 | `wolf_target_update` | `{ wolfId, wolfSeat, targetId, targetSeat, message }` | 狼人队友 | 狼人刀目标实时更新 |
 | `role_select_start` | `{ availableRoles, timeoutSeconds, deadline, totalSeconds }` | 全体 | 抢身份阶段开始 |
 | `role_select_result` | `{ assignments, message }` | 全体 | 抢身份结果（含分配详情） |
+| `last_words` | `{ content, playerId, playerName, isAI }` | 全体 | 遗言消息 |
 | `player_update` | `{ playerId, isAlive, playerName }` | 全体 | 玩家状态变更 |
 | `game_over` | `{ winnerFaction, ... }` | 全体 | 游戏结束 |
 | `error` | `{ content }` | 个人 | 错误消息 |
@@ -384,6 +388,7 @@ judge_service.run_game()
 | `roleSelectStart` | `RoleSelectStartPayload \| null` | 抢身份阶段数据 |
 | `mySelectedRole` | `string \| null` | 我选择的角色 |
 | `gameMode` | `GameMode` | 游戏模式（classic / role_select） |
+| `isLastWords` | `boolean` | 是否处于遗言阶段 |
 
 ---
 
@@ -397,6 +402,7 @@ judge_service.run_game()
 | 守卫 | civilian | ✅ | guard | 不能连续守同一人 |
 | 猎人 | civilian | ❌ | — | 死亡时可开枪 |
 | 女巫 | civilian | ✅ | witch | 解药/毒药各一次 |
+| 白痴 | civilian | ❌ | — | 被投票放逐时免疫出局，之后不能投票 |
 
 **夜间行动顺序**：狼人 → 预言家 → 女巫 → 守卫
 
@@ -407,6 +413,7 @@ judge_service.run_game()
 | `six-player-dark` | 6人暗牌场 | 6 | 2狼 + 1预言家 + 1守卫 + 2平民 |
 | `nine-player-dark` | 9人暗牌场 | 9 | 3狼 + 1预言家 + 1守卫 + 1猎人 + 3平民 |
 | `twelve-player-dark` | 12人暗牌场 | 12 | 4狼 + 1预言家 + 1守卫 + 1女巫 + 1猎人 + 4平民 |
+| `twelve-player-standard-dark` | 12人标准暗牌场（预女猎白） | 12 | 4狼 + 1预言家 + 1女巫 + 1猎人 + 1白痴 + 4平民 |
 
 ---
 
@@ -512,6 +519,14 @@ BaseGameMode（抽象基类）
 - **夜间死亡**：仅首夜（第1轮）有遗言，后续夜晚无遗言（通过 `on_night_death` 钩子控制）
 - **投票淘汰**：始终有遗言（通过 `on_vote_elimination` 钩子控制）
 - 遗言规则可通过自定义模式覆写钩子修改
+- 遗言通过 WebSocket `last_words` 消息类型发送，前端通过 `isLastWords` 标记区分遗言和普通发言
+
+### 11.9 白痴翻牌免疫
+
+- 白痴被投票放逐时自动翻牌，免疫出局
+- 翻牌后标记 `vote_immunity_used = True`，之后不能再参与投票
+- 被狼人杀害或被女巫毒杀时无法免疫，正常死亡
+- Player 模型新增 `vote_immunity_used` 字段
 
 ---
 
@@ -575,6 +590,14 @@ python -c "import py_compile; py_compile.compile('app/services/game_service.py',
 - [x] GameRoom.vue getRoom() 传入 playerId
 - [x] test_game_flow.py 断言修正
 
+### Bug修复与功能增强（2026-05-20 第五批）
+- [x] 修复抢身份后角色丢失：useGameSocket.ts ROLE_TYPES 数组补充 hunter/witch/idiot
+- [x] 修复遗言无法发送：前端增加 isLastWords 状态，通过 WebSocket last_words 消息发送
+- [x] 修复 canNightAction 缺少 witch 角色
+- [x] 新增白痴角色（idiot）：翻牌免疫投票出局，之后不能投票
+- [x] 新增12人标准暗牌场预设（预女猎白）：4狼+1预言家+1女巫+1猎人+1白痴+4平民
+- [x] NightAction.vue 添加女巫夜间行动模板
+
 ---
 
 ## 十四、常见修改场景速查
@@ -586,7 +609,7 @@ python -c "import py_compile; py_compile.compile('app/services/game_service.py',
 | 修改游戏流程/阶段逻辑 | `judge_service.py` + `game_service.py` |
 | 修改前端页面布局 | `views/*.vue` |
 | 修改组件行为 | `components/common/*.vue` 或 `components/game/*.vue` |
-| 新增角色 | `roles.py`（注册 RoleSkill）+ `enums.py`（新增 RoleType） |
+| 新增角色 | `roles.py`（注册 RoleSkill）+ `enums.py`（新增 RoleType）+ `game.ts` + `constants.ts` + `useGameSocket.ts`（ROLE_TYPES）+ `RoleSelect.vue`（ROLE_INFO） |
 | 新增场景预设 | `roles.py`（SCENE_PRESETS） |
 | 新增游戏模式 | `mode/base.py`（继承 BaseGameMode + 注册 MODE_REGISTRY） |
 | 修改 Store 状态 | `gameStore.ts` + `game.ts`（类型） |

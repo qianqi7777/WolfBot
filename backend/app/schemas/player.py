@@ -13,3 +13,4 @@ class Player(BaseSchema):
     is_alive: bool = True
     night_action_done: bool = False
     last_guard_target_id: str | None = Field(default=None, alias="lastGuardTargetId")
+    vote_immunity_used: bool = False  # 白痴翻牌免疫已使用

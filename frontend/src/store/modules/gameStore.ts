@@ -45,6 +45,8 @@ export interface GameState {
   roleSelectStart: RoleSelectStartPayload | null;
   mySelectedRole: string | null;
   gameMode: GameMode;
+  // 遗言相关
+  isLastWords: boolean;
 }
 
 const SESSION_GAME_ID_KEY = 'wolfbot.gameId';
@@ -158,6 +160,7 @@ export const useGameStore = defineStore('game', {
     roleSelectStart: null,
     mySelectedRole: null,
     gameMode: 'classic',
+    isLastWords: false,
   }),
   getters: {
     alivePlayers: (state) => state.players.filter((player) => player.isAlive),
@@ -273,6 +276,9 @@ export const useGameStore = defineStore('game', {
     setGameMode(mode: GameMode) {
       this.gameMode = mode;
     },
+    setIsLastWords(flag: boolean) {
+      this.isLastWords = flag;
+    },
     addAnnounce(content: string) {
       this.announceList.push({
         id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
@@ -326,6 +332,7 @@ export const useGameStore = defineStore('game', {
       this.roleSelectStart = null;
       this.mySelectedRole = null;
       this.gameMode = 'classic';
+      this.isLastWords = false;
       clearSession();
     },
   },

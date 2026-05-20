@@ -13,5 +13,5 @@ export function canSpeak(status: GameStatus): boolean {
 }
 
 export function canNightAction(status: GameStatus, role: RoleType): boolean {
-  return status === 'night' && (role === 'wolf' || role === 'prophet' || role === 'guard');
+  return status === 'night' && (role === 'wolf' || role === 'prophet' || role === 'guard' || role === 'witch');
 }

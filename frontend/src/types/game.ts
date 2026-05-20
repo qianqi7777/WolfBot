@@ -1,8 +1,8 @@
 export type GameStatus = 'waiting' | 'role_select' | 'night' | 'day' | 'speak' | 'vote' | 'end';
 
-export type RoleType = 'wolf' | 'civilian' | 'prophet' | 'guard' | 'hunter' | 'witch' | 'unknown';
+export type RoleType = 'wolf' | 'civilian' | 'prophet' | 'guard' | 'hunter' | 'witch' | 'idiot' | 'unknown';
 
-export type ScenePreset = 'six-player-dark' | 'nine-player-dark' | 'twelve-player-dark';
+export type ScenePreset = 'six-player-dark' | 'nine-player-dark' | 'twelve-player-dark' | 'twelve-player-standard-dark';
 
 export type GameMode = 'classic' | 'role_select';
 
@@ -206,6 +206,7 @@ export interface SocketMessage<TPayload = Record<string, unknown>> {
     | 'role_select_start'
     | 'role_select_choice'
     | 'role_select_result'
+    | 'last_words'
     | 'error';
   payload?: TPayload;
   timestamp?: string;

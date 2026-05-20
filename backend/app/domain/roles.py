@@ -191,6 +191,23 @@ WITCH_SKILL = RoleSkill(
     ],
 )
 
+IDIOT_SKILL = RoleSkill(
+    role_id=RoleType.idiot,
+    name="白痴",
+    faction="civilian",
+    has_night_action=False,
+    night_action_type="",
+    ai_hint="你是白痴（好人阵营）。你被投票放逐时可以翻牌免疫出局，但之后不能投票。注意：被狼人杀害或被女巫毒杀时无法免疫。",
+    human_hint="你是白痴，被投票放逐时可翻牌免疫出局",
+    mock_speeches=[
+        "我觉得大家应该冷静思考，别被带偏了。",
+        "我手上没什么特别的信息，但我的直觉告诉我有人在说谎。",
+        "大家别急着投票，先把逻辑理清楚。",
+        "不管怎样，我的立场是好人阵营，这一点毋庸置疑。",
+    ],
+    can_target_self=False,
+)
+
 
 # ------------------------------------------------------------------
 #  注册表
@@ -204,6 +221,7 @@ SKILL_REGISTRY: dict[RoleType, RoleSkill] = {
     RoleType.guard: GUARD_SKILL,
     RoleType.hunter: HUNTER_SKILL,
     RoleType.witch: WITCH_SKILL,
+    RoleType.idiot: IDIOT_SKILL,
     RoleType.unknown: RoleSkill(
         role_id=RoleType.unknown,
         name="未知",
@@ -304,6 +322,32 @@ SCENE_PRESETS: dict[str, ScenePreset] = {
         },
         is_dark=True,
         has_sheriff=True,
+        rules={
+            "win_condition": "slaughter_edge",
+            "speak_order": "by_seat",
+            "max_rounds": 15,
+            "first_night_death_allowed": True,
+            "last_words_allowed": True,
+            "vote_tie_rule": "no_elimination",
+            "night_action_timeout_seconds": 30,
+            "vote_timeout_seconds": 30,
+        },
+    ),
+    "twelve-player-standard-dark": ScenePreset(
+        preset_id="twelve-player-standard-dark",
+        name="12人标准暗牌场（预女猎白）",
+        description="4狼8好人，神职为预言家、女巫、猎人、白痴，暗牌局，屠边规则。",
+        player_count=12,
+        role_distribution={
+            RoleType.wolf: 4,
+            RoleType.prophet: 1,
+            RoleType.witch: 1,
+            RoleType.hunter: 1,
+            RoleType.idiot: 1,
+            RoleType.civilian: 4,
+        },
+        is_dark=True,
+        has_sheriff=False,
         rules={
             "win_condition": "slaughter_edge",
             "speak_order": "by_seat",

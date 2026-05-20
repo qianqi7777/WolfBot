@@ -65,6 +65,7 @@ const ROLE_INFO: Record<string, { id: string; name: string; icon: string; desc: 
   guard: { id: 'guard', name: '守卫', icon: '🛡️', desc: '每晚守护一名玩家' },
   hunter: { id: 'hunter', name: '猎人', icon: '🎯', desc: '死亡时可开枪带走一人' },
   witch: { id: 'witch', name: '女巫', icon: '🧪', desc: '一瓶解药一瓶毒药各一次' },
+  idiot: { id: 'idiot', name: '白痴', icon: '🃏', desc: '被投票放逐时免疫出局' },
 };
 
 const availableRoles = computed(() => {

@@ -2,6 +2,7 @@ import type { GameStatus, RoleType, ScenePreset } from '@/types/game';
 
 export const GAME_STATUS_LABELS: Record<GameStatus, string> = {
   waiting: '等待开局',
+  role_select: '抢身份',
   night: '夜间阶段',
   day: '白天阶段',
   speak: '发言阶段',
@@ -16,6 +17,7 @@ export const ROLE_LABELS: Record<RoleType, string> = {
   guard: '守卫',
   hunter: '猎人',
   witch: '女巫',
+  idiot: '白痴',
   unknown: '未知',
 };
 
@@ -41,6 +43,12 @@ export const SCENE_PRESET_OPTIONS: Array<{
     value: 'twelve-player-dark',
     label: '12人暗牌场',
     description: '4狼8好人，神职为预言家、守卫、女巫、猎人，暗牌局，有警长。',
+    playerCount: 12,
+  },
+  {
+    value: 'twelve-player-standard-dark',
+    label: '12人标准暗牌场（预女猎白）',
+    description: '4狼8好人，神职为预言家、女巫、猎人、白痴，屠边规则。',
     playerCount: 12,
   },
 ];

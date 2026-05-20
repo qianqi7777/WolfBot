@@ -91,7 +91,29 @@
         </div>
       </template>
 
-      <!-- 平民：等待 -->
+      <!-- 女巫：选择使用药剂的目标 -->
+      <template v-else-if="role === 'witch'">
+        <p>请选择要使用药剂的目标（解药救人或毒药杀人）：</p>
+        <el-radio-group v-model="selectedTarget" :disabled="disabled">
+          <el-radio
+            v-for="player in targetPlayers"
+            :key="player.id"
+            :value="player.id"
+          >
+            {{ player.seatNumber }}号({{ player.name }})
+          </el-radio>
+        </el-radio-group>
+        <el-button
+          type="warning"
+          :disabled="disabled || !selectedTarget"
+          style="margin-top: 12px"
+          @click="handleSubmit"
+        >
+          确认使用药剂
+        </el-button>
+      </template>
+
+      <!-- 无夜间行动的角色（平民、猎人、白痴等）：等待 -->
       <template v-else>
         <p>夜间等待中...</p>
       </template>

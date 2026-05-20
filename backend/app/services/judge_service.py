@@ -625,6 +625,8 @@ class Judge:
     async def _announce_vote_result(self, result: dict[str, Any]) -> bool:
         """公布投票结果。返回 True 继续，False 结束。"""
         eliminated_id = result.get("eliminated")
+        idiot_immunity = result.get("idiot_immunity", False)
+        eliminated_id_for_detail = result.get("eliminated_id_for_detail")
         winner_faction = result.get("winnerFaction")
         game = self._game()
         seat_map = {p.id: p.seat_number for p in game.players}
@@ -702,6 +704,13 @@ class Judge:
             if allow_last_words:
                 await self._announce(f"{name} 可以发表遗言")
                 await self._wait_last_words(eliminated_id, name, timeout_seconds=self._preset_rules.get("last_words_timeout_seconds", 30))
+        elif idiot_immunity and eliminated_id_for_detail:
+            # 白痴翻牌免疫
+            immune_player = next(
+                (p for p in self._game().players if p.id == eliminated_id_for_detail), None
+            )
+            name = f"{immune_player.seat_number}号({immune_player.name})" if immune_player else "某玩家"
+            await self._announce(f"投票结果：{name} 被放逐，但翻牌白痴身份，免疫出局！之后不能投票。")
         else:
             # 平票或无人出局
             if result.get("gameStatus") == GameStatus.night:

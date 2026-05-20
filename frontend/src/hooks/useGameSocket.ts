@@ -19,7 +19,7 @@ import type {
 } from '@/types/game';
 
 const GAME_STATUSES: GameStatus[] = ['waiting', 'role_select', 'night', 'day', 'speak', 'vote', 'end'];
-const ROLE_TYPES: RoleType[] = ['wolf', 'civilian', 'prophet', 'guard', 'unknown'];
+const ROLE_TYPES: RoleType[] = ['wolf', 'civilian', 'prophet', 'guard', 'hunter', 'witch', 'idiot', 'unknown'];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
@@ -290,6 +290,9 @@ export function useGameSocket() {
           if (typeof (message.payload as Record<string, unknown>).totalSeconds === 'number') {
             store.setCurrentPhaseTimeout((message.payload as Record<string, unknown>).totalSeconds as number);
           }
+          // 遗言标记
+          const isLastWords = (message.payload as Record<string, unknown>).isLastWords === true;
+          store.setIsLastWords(isLastWords);
         }
         break;
       case 'vote_result':

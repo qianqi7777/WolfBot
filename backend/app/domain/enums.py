@@ -18,6 +18,7 @@ class RoleType(str, Enum):
     guard = "guard"
     hunter = "hunter"
     witch = "witch"
+    idiot = "idiot"       # 白痴
     unknown = "unknown"
 
 
@@ -39,4 +40,5 @@ class MessageType(str, Enum):
     role_select_start = "role_select_start"     # 抢身份阶段开始
     role_select_choice = "role_select_choice"   # 玩家提交抢身份选择
     role_select_result = "role_select_result"   # 抢身份结果公布
+    last_words = "last_words"             # 遗言
     error = "error"                       # 错误消息
