@@ -1,14 +1,15 @@
 export type GameStatus = 'waiting' | 'night' | 'day' | 'speak' | 'vote' | 'end';
 
-export type RoleType = 'wolf' | 'civilian' | 'prophet' | 'guard' | 'unknown';
+export type RoleType = 'wolf' | 'civilian' | 'prophet' | 'guard' | 'hunter' | 'witch' | 'unknown';
 
-export type ScenePreset = 'six-player-dark';
+export type ScenePreset = 'six-player-dark' | 'nine-player-dark' | 'twelve-player-dark';
 
 export interface SceneConfig {
   preset: ScenePreset;
   name: string;
   description: string;
   playerCount: number;
+  speakTimeoutSeconds: number;
 }
 
 export interface AiConfigForm {

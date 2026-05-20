@@ -17,7 +17,7 @@ router = APIRouter()
 async def game_ws(websocket: WebSocket) -> None:
     game_id = websocket.query_params.get("gameId", "")
     player_id = websocket.query_params.get("playerId", "")
-    await manager.connect(game_id, websocket)
+    await manager.connect(game_id, websocket, player_id=player_id)
     try:
         snapshot = get_game(game_id, requester_id=player_id or None)
         await manager.send_to(

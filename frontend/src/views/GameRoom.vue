@@ -5,7 +5,7 @@
       <el-card shadow="never">
         <template #header>开局前设置</template>
         <el-alert
-          title="当前默认场景为 6 人暗牌场，AI API 配置仅作用于本房间，开局前可随时保存。"
+          title="选择场景预设后自动填充配置，AI API 配置仅作用于本房间，开局前可随时保存。"
           type="info"
           show-icon
           :closable="false"
@@ -13,16 +13,27 @@
         />
         <el-form label-width="120px">
           <el-form-item label="场景预设">
-            <el-space>
-              <el-tag type="success">{{ settingsForm.scene.name }}</el-tag>
-              <el-tag type="info">{{ settingsForm.scene.preset }}</el-tag>
-            </el-space>
+            <el-select v-model="settingsForm.scene.preset" placeholder="选择场景" @change="onPresetChange">
+              <el-option
+                v-for="opt in SCENE_PRESET_OPTIONS"
+                :key="opt.value"
+                :label="opt.label"
+                :value="opt.value"
+              >
+                <span>{{ opt.label }}</span>
+                <span style="float: right; color: #8492a6; font-size: 12px">{{ opt.playerCount }}人</span>
+              </el-option>
+            </el-select>
           </el-form-item>
           <el-form-item label="场景说明">
-            <el-input v-model="settingsForm.scene.description" type="textarea" :rows="3" />
+            <el-input v-model="settingsForm.scene.description" type="textarea" :rows="2" />
           </el-form-item>
           <el-form-item label="玩家人数">
-            <el-input-number v-model="settingsForm.scene.playerCount" :min="6" :max="6" :disabled="true" />
+            <el-input-number v-model="settingsForm.scene.playerCount" :min="6" :max="12" disabled />
+          </el-form-item>
+          <el-form-item label="每人发言时间(秒)">
+            <el-input-number v-model="settingsForm.scene.speakTimeoutSeconds" :min="5" :max="120" :step="5" />
+            <span style="margin-left: 8px; color: #909399; font-size: 12px">每人轮流发言的超时时间</span>
           </el-form-item>
           <el-divider content-position="left">AI 接口配置</el-divider>
           <el-form-item label="API Base URL">
@@ -101,7 +112,8 @@ import { getRoom, startGame, testRoomAiConnection, updateRoomSettings } from '@/
 import GameStatus from '@/components/game/GameStatus.vue';
 import PlayerList from '@/components/game/PlayerList.vue';
 import { useGameSocket } from '@/hooks/useGameSocket';
-import { useGameStore } from '@/store/modules/gameStore';
+import { useGameStore, saveAiConfigToLocal, getSavedAiConfig } from '@/store/modules/gameStore';
+import { SCENE_PRESET_OPTIONS } from '@/utils/constants';
 import type { AiConnectionTestResult, RoomSettingsForm, RoomSettings } from '@/types/game';
 
 const props = defineProps<{ gameId: string }>();
@@ -114,20 +126,23 @@ const connectionResult = ref<AiConnectionTestResult | null>(null);
 const { connect, disconnect, isConnected } = useGameSocket();
 
 function cloneSettings(settings: RoomSettings): RoomSettingsForm {
+  // 优先使用 localStorage 中保存的非敏感字段
+  const saved = getSavedAiConfig();
   return {
     scene: {
       preset: settings.scene.preset,
       name: settings.scene.name,
       description: settings.scene.description,
       playerCount: settings.scene.playerCount,
+      speakTimeoutSeconds: settings.scene.speakTimeoutSeconds,
     },
     ai: {
-      baseUrl: settings.ai.baseUrl,
+      baseUrl: saved.baseUrl || settings.ai.baseUrl,
       apiKey: '',
-      model: settings.ai.model,
-      timeoutSeconds: settings.ai.timeoutSeconds,
-      temperature: settings.ai.temperature,
-      enableMock: settings.ai.enableMock,
+      model: saved.model || settings.ai.model,
+      timeoutSeconds: saved.timeoutSeconds || settings.ai.timeoutSeconds,
+      temperature: saved.temperature ?? settings.ai.temperature,
+      enableMock: saved.enableMock ?? settings.ai.enableMock,
     },
   };
 }
@@ -171,6 +186,15 @@ const refreshRoom = async () => {
 const startRoom = async () => {
   loading.value = true;
   try {
+    // 开局前自动保存设置，确保API Key等配置已提交到后端
+    try {
+      const settingsSnapshot = await updateRoomSettings(props.gameId, settingsForm);
+      store.applySnapshot(settingsSnapshot, store.myId || settingsSnapshot.playerId);
+      saveAiConfigToLocal(settingsForm.ai);
+    } catch {
+      // 设置保存失败不阻塞开局，但提示用户
+      ElMessage.warning('设置保存失败，将使用上次保存的配置开局');
+    }
     const snapshot = await startGame(props.gameId);
     store.applySnapshot(snapshot, store.myId || snapshot.playerId);
     await router.replace({ name: 'game', params: { gameId: props.gameId } });
@@ -186,6 +210,8 @@ const saveSettings = async () => {
   try {
     const snapshot = await updateRoomSettings(props.gameId, settingsForm);
     store.applySnapshot(snapshot, store.myId || snapshot.playerId);
+    // 持久化 AI 配置到 localStorage（不含 apiKey）
+    saveAiConfigToLocal(settingsForm.ai);
     ElMessage.success('设置已保存');
   } catch {
     ElMessage.error('保存设置失败');
@@ -197,8 +223,10 @@ const saveSettings = async () => {
 const testConnection = async () => {
   testLoading.value = true;
   try {
-    connectionResult.value = await testRoomAiConnection(props.gameId);
-    ElMessage.success('连通性测试成功');
+    connectionResult.value = await testRoomAiConnection(props.gameId, settingsForm.ai);
+    if (connectionResult.value.success) {
+      ElMessage.success('连通性测试成功');
+    }
   } catch (error) {
     connectionResult.value = null;
     ElMessage.error(
@@ -215,6 +243,15 @@ const resetSettings = () => {
   const next = cloneSettings(store.roomSettings);
   Object.assign(settingsForm.scene, next.scene);
   Object.assign(settingsForm.ai, next.ai);
+};
+
+const onPresetChange = (preset: string) => {
+  const opt = SCENE_PRESET_OPTIONS.find((o) => o.value === preset);
+  if (opt) {
+    settingsForm.scene.name = opt.label;
+    settingsForm.scene.description = opt.description;
+    settingsForm.scene.playerCount = opt.playerCount;
+  }
 };
 
 onMounted(async () => {

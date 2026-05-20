@@ -4,10 +4,39 @@ from typing import Dict, Iterable
 
 from app.core.exceptions import AppError
 from app.domain.enums import GameStatus, RoleType
+from app.domain.roles import (
+    SKILL_REGISTRY,
+    get_preset,
+    build_role_list,
+    get_night_action_roles,
+)
 from app.schemas.game import AiConfigView, GameResult, GameSnapshot, RoomSettings, RoomSettingsUpdate, SceneConfig
 from app.schemas.player import Player
 from app.utils.time import utc_now_iso
 from app.utils.ids import generate_game_id, generate_player_id
+
+
+def _check_win_condition(game: "GameState") -> str | None:
+    """检查胜负条件，返回胜利阵营或 None。
+    使用角色技能注册表判断阵营，支持动态角色组合。
+    规则：狼人全灭→好人胜；平民全灭→狼人胜（屠民）；神职全灭→狼人胜（屠神）。
+    """
+    alive_wolves = [p for p in game.players if p.is_alive and SKILL_REGISTRY[p.role].faction == "wolf"]
+    alive_civilians = [p for p in game.players if p.is_alive and p.role == RoleType.civilian]
+    alive_gods = [
+        p for p in game.players
+        if p.is_alive
+        and SKILL_REGISTRY[p.role].faction == "civilian"
+        and p.role != RoleType.civilian
+    ]
+
+    if not alive_wolves:
+        return "civilian"
+    if not alive_civilians:
+        return "wolf"  # 屠民
+    if not alive_gods:
+        return "wolf"  # 屠神
+    return None
 
 
 @dataclass
@@ -32,14 +61,18 @@ def _default_scene() -> SceneConfig:
 
 def _default_ai_runtime() -> AiRuntimeConfig:
     from app.core.config import settings
+    from app.services.config_service import apply_saved_config_to_defaults
+
+    # 优先使用持久化配置，其次使用环境变量
+    saved = apply_saved_config_to_defaults()
 
     return AiRuntimeConfig(
-        base_url=settings.ai_api_base_url,
-        api_key=settings.ai_api_key,
-        model=settings.ai_model,
-        timeout_seconds=settings.ai_timeout_seconds,
-        temperature=settings.ai_temperature,
-        enable_mock=settings.ai_enable_mock,
+        base_url=saved.get("base_url") or settings.ai_api_base_url,
+        api_key=saved.get("api_key") or settings.ai_api_key,
+        model=saved.get("model") or settings.ai_model,
+        timeout_seconds=saved.get("timeout_seconds") or settings.ai_timeout_seconds,
+        temperature=saved.get("temperature") or settings.ai_temperature,
+        enable_mock=saved.get("enable_mock") if saved.get("enable_mock") is not None else settings.ai_enable_mock,
     )
 
 
@@ -107,6 +140,22 @@ def _snapshot(game: GameState, player_id: str, my_role: RoleType = RoleType.unkn
         if current_player and current_player.is_alive and not current_player.night_action_done:
             night_action_required = True
 
+    # 隐藏其他玩家的角色信息：只有自己能看到自己的角色
+    safe_players = []
+    for p in game.players:
+        if p.id == player_id:
+            safe_players.append(p)
+        else:
+            safe_players.append(Player(
+                id=p.id,
+                name=p.name,
+                role=RoleType.unknown,
+                is_ai=p.is_ai,
+                is_alive=p.is_alive,
+                night_action_done=p.night_action_done,
+                last_guard_target_id=p.last_guard_target_id,
+            ))
+
     return GameSnapshot(
         game_id=game.game_id,
         player_id=player_id,
@@ -115,7 +164,7 @@ def _snapshot(game: GameState, player_id: str, my_role: RoleType = RoleType.unkn
         current_speaker_id=game.current_speaker_id,
         started=game.started,
         winner_faction=game.winner_faction,
-        players=game.players,
+        players=safe_players,
         my_role=my_role,
         night_action_required=night_action_required,
         room_settings=_room_settings_view(game.room_settings),
@@ -157,18 +206,15 @@ def advance_speak_turn(game_id: str) -> str | None:
 
 
 def _assign_roles(players: Iterable[Player], preset: str = "six-player-dark") -> None:
+    """根据场景预设分配角色。使用角色技能注册表的 build_role_list。"""
     player_list = list(players)
     total = len(player_list)
-    if preset == "six-player-dark" and total == 6:
-        roles = [
-            RoleType.wolf,
-            RoleType.wolf,
-            RoleType.prophet,
-            RoleType.guard,
-            RoleType.civilian,
-            RoleType.civilian,
-        ]
-    else:
+
+    # 使用注册表构建角色列表
+    try:
+        roles = build_role_list(preset)
+    except ValueError:
+        # 未知预设时使用动态公式
         n_wolves = max(1, total // 4)
         n_prophets = 1 if total >= 4 else 0
         n_guards = 1 if total >= 6 else 0
@@ -177,8 +223,16 @@ def _assign_roles(players: Iterable[Player], preset: str = "six-player-dark") ->
         roles.extend([RoleType.prophet] * n_prophets)
         roles.extend([RoleType.guard] * n_guards)
         roles.extend([RoleType.civilian] * (total - n_wolves - n_prophets - n_guards))
+        random.shuffle(roles)
 
-    random.shuffle(roles)
+    # 确保角色数与玩家数匹配
+    if len(roles) != total:
+        # 动态调整：多余则截断，不足则补平民
+        if len(roles) > total:
+            roles = roles[:total]
+        else:
+            roles.extend([RoleType.civilian] * (total - len(roles)))
+            random.shuffle(roles)
 
     for index, player in enumerate(player_list):
         player.role = roles[index]
@@ -222,13 +276,22 @@ def update_room_settings(game_id: str, payload: RoomSettingsUpdate) -> GameSnaps
         raise AppError("游戏已开始，无法修改设置", status_code=409)
 
     game.room_settings.scene = payload.scene
-    game.room_settings.ai.base_url = payload.ai.base_url
+    game.room_settings.ai.base_url = payload.ai.base_url.strip()
     if payload.ai.api_key.strip():
-        game.room_settings.ai.api_key = payload.ai.api_key
-    game.room_settings.ai.model = payload.ai.model
+        game.room_settings.ai.api_key = payload.ai.api_key.strip()
+    game.room_settings.ai.model = payload.ai.model.strip()
     game.room_settings.ai.timeout_seconds = payload.ai.timeout_seconds
     game.room_settings.ai.temperature = payload.ai.temperature
     game.room_settings.ai.enable_mock = payload.ai.enable_mock
+
+    # 自动关闭 mock 模式：当有有效的 base_url 和 api_key 时
+    if game.room_settings.ai.base_url and game.room_settings.ai.api_key and game.room_settings.ai.enable_mock:
+        game.room_settings.ai.enable_mock = False
+
+    # 持久化 AI 配置到文件
+    from app.services.config_service import save_config
+    save_config(game.room_settings.ai)
+
     return _snapshot(game, game.owner_player_id)
 
 
@@ -347,18 +410,18 @@ def record_night_action(game_id: str, player_id: str, target_id: str) -> None:
         raise AppError("玩家不存在", status_code=404)
     if not player.is_alive:
         raise AppError("玩家已死亡，无法行动", status_code=409)
-    if player.role not in {RoleType.wolf, RoleType.prophet, RoleType.guard}:
+    if player.role not in {r for r, s in SKILL_REGISTRY.items() if s.has_night_action}:
         raise AppError("当前身份不能执行夜间行动", status_code=409)
 
     target = next((item for item in game.players if item.id == target_id), None)
     if target is None or not target.is_alive:
         raise AppError("目标不存在或已死亡", status_code=404)
 
-    if target_id == player_id:
+    if target_id == player_id and not SKILL_REGISTRY[player.role].can_target_self:
         raise AppError("不能对自己执行夜间行动", status_code=409)
 
-    if player.role == RoleType.guard and player.last_guard_target_id == target_id:
-        raise AppError("守卫不能连续两晚守护同一人", status_code=409)
+    if not SKILL_REGISTRY[player.role].consecutive_target_allowed and player.last_guard_target_id == target_id:
+        raise AppError(f"{SKILL_REGISTRY[player.role].name}不能连续两晚选择同一目标", status_code=409)
 
     game.night_actions = [action for action in game.night_actions if action.get("playerId") != player_id]
     game.night_actions.append({"playerId": player_id, "targetId": target_id, "role": player.role.value})
@@ -443,14 +506,9 @@ def resolve_night(game_id: str) -> dict[str, object]:
     game.night_actions.clear()
 
     # --- Check win condition ---
-    alive_wolves = sum(1 for p in game.players if p.is_alive and p.role == RoleType.wolf)
-    alive_others = sum(1 for p in game.players if p.is_alive and p.role != RoleType.wolf)
-
-    if alive_wolves == 0:
-        game.winner_faction = "civilian"
-        game.game_status = GameStatus.end
-    elif alive_wolves >= alive_others:
-        game.winner_faction = "wolf"
+    winner = _check_win_condition(game)
+    if winner:
+        game.winner_faction = winner
         game.game_status = GameStatus.end
 
     return {
@@ -474,7 +532,24 @@ def resolve_vote_round(game_id: str) -> dict[str, object]:
         target_id = str(vote.get("targetId", ""))
         tally[target_id] = tally.get(target_id, 0) + 1
 
-    eliminated_id = max(tally, key=tally.get)
+    # 检查平票：如果最高票不止一人，则无人出局
+    if tally:
+        max_votes = max(tally.values())
+        top_candidates = [tid for tid, count in tally.items() if count == max_votes]
+        if len(top_candidates) > 1:
+            # 平票，无人出局
+            game.votes.clear()
+            game.current_round += 1
+            game.current_speaker_id = None
+            game.speak_order.clear()
+            game.speak_turn_submitted = False
+            game.announcements.append("投票平票，无人出局")
+            game.game_status = GameStatus.night
+            return {"eliminated": None, "winnerFaction": game.winner_faction, "gameStatus": game.game_status, "currentRound": game.current_round}
+        eliminated_id = top_candidates[0]
+    else:
+        eliminated_id = None
+
     eliminated_player = next((player for player in game.players if player.id == eliminated_id), None)
     if eliminated_player is not None:
         eliminated_player.is_alive = False
@@ -486,17 +561,13 @@ def resolve_vote_round(game_id: str) -> dict[str, object]:
     game.speak_order.clear()
     game.speak_turn_submitted = False
 
-    alive_wolves = sum(1 for player in game.players if player.is_alive and player.role == RoleType.wolf)
-    alive_others = sum(1 for player in game.players if player.is_alive and player.role != RoleType.wolf)
-
-    if alive_wolves == 0:
-        game.winner_faction = "civilian"
-        game.game_status = GameStatus.end
-    elif alive_wolves >= alive_others:
-        game.winner_faction = "wolf"
+    winner = _check_win_condition(game)
+    if winner:
+        game.winner_faction = winner
         game.game_status = GameStatus.end
     else:
-        game.game_status = GameStatus.speak
+        # 投票后不进入发言，直接进入下一轮夜晚（由 AI 循环控制流程）
+        game.game_status = GameStatus.night
 
     return {
         "eliminated": eliminated_player.id if eliminated_player else None,

@@ -11,6 +11,7 @@ import type {
   Player,
   RoleType,
   VoteData,
+  AiConfigForm,
 } from '@/types/game';
 
 export interface GameState {
@@ -34,6 +35,40 @@ export interface GameState {
 
 const SESSION_GAME_ID_KEY = 'wolfbot.gameId';
 const SESSION_PLAYER_ID_KEY = 'wolfbot.playerId';
+const AI_CONFIG_KEY = 'wolfbot.aiConfig';
+
+/** 从 localStorage 恢复 AI 配置（非敏感字段） */
+function loadAiConfig(): Partial<AiConfigForm> | null {
+  if (typeof localStorage === 'undefined') return null;
+  try {
+    const raw = localStorage.getItem(AI_CONFIG_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 保存 AI 配置到 localStorage（不含 apiKey） */
+export function saveAiConfigToLocal(form: AiConfigForm): void {
+  if (typeof localStorage === 'undefined') return;
+  try {
+    const toSave = {
+      baseUrl: form.baseUrl,
+      model: form.model,
+      timeoutSeconds: form.timeoutSeconds,
+      temperature: form.temperature,
+      enableMock: form.enableMock,
+    };
+    localStorage.setItem(AI_CONFIG_KEY, JSON.stringify(toSave));
+  } catch {
+    // localStorage 不可用则忽略
+  }
+}
+
+/** 获取上次保存的 AI 配置，合并到表单 */
+export function getSavedAiConfig(): Partial<AiConfigForm> {
+  return loadAiConfig() ?? {};
+}
 
 function createDefaultRoomSettings(): RoomSettings {
   return {
@@ -42,6 +77,7 @@ function createDefaultRoomSettings(): RoomSettings {
       name: '6人暗牌场',
       description: '2狼4好人，神职为预言家和守卫，暗牌局，无警长，节奏快。',
       playerCount: 6,
+      speakTimeoutSeconds: 15,
     },
     ai: {
       baseUrl: '',

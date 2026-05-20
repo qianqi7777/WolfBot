@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Query
 
 from app.domain.enums import MessageType
-from app.schemas.game import AiConnectionTestResult, CreateGameRequest, GameSnapshot, JoinGameRequest, RoomSettingsUpdate
+from app.schemas.game import AiConfigInput, AiConnectionTestResult, CreateGameRequest, GameSnapshot, JoinGameRequest, RoomSettingsUpdate
 from app.schemas.socket import SocketMessage
 from app.services.ai_service import test_ai_connection
 from app.services.game_service import update_room_settings
@@ -61,10 +61,37 @@ async def update_room_settings_route(game_id: str, payload: RoomSettingsUpdate) 
 
 
 @router.post("/{game_id}/ai/test", response_model=AiConnectionTestResult)
-async def test_ai_connection_route(game_id: str) -> AiConnectionTestResult:
-    return await test_ai_connection(game_id)
+async def test_ai_connection_route(game_id: str, payload: AiConfigInput | None = None) -> AiConnectionTestResult:
+    from app.services.game_service import AiRuntimeConfig
+
+    runtime_override = None
+    if payload and (payload.base_url.strip() or payload.api_key.strip()):
+        runtime_override = AiRuntimeConfig(
+            base_url=payload.base_url.strip(),
+            api_key=payload.api_key.strip(),
+            model=payload.model.strip(),
+            timeout_seconds=payload.timeout_seconds,
+            temperature=payload.temperature,
+            enable_mock=False,
+        )
+    return await test_ai_connection(game_id, runtime_override)
 
 
 @router.post("/{game_id}/start", response_model=GameSnapshot)
 async def start_room_route(game_id: str) -> GameSnapshot:
-    return start_room(game_id)
+    snapshot = start_room(game_id)
+    # 向真人玩家推送角色信息（start_room 已经在内部调了 launch_ai_cycle）
+    from app.services.game_service import get_game_state
+    from app.domain.enums import MessageType
+    from app.schemas.socket import SocketMessage
+    from app.utils.time import utc_now_iso
+    game = get_game_state(game_id)
+    for player in game.players:
+        if not player.is_ai:
+            role_msg = SocketMessage(
+                type=MessageType.role_info,
+                timestamp=utc_now_iso(),
+                payload={"role": player.role.value},
+            ).model_dump_json()
+            await manager.send_to_player(game_id, player.id, role_msg)
+    return snapshot

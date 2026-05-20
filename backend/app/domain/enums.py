@@ -15,6 +15,8 @@ class RoleType(str, Enum):
     civilian = "civilian"
     prophet = "prophet"
     guard = "guard"
+    hunter = "hunter"
+    witch = "witch"
     unknown = "unknown"
 
 

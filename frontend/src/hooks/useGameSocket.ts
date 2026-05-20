@@ -57,6 +57,7 @@ function isRoomSettings(value: unknown): value is RoomSettings {
     typeof value.scene.name === 'string' &&
     typeof value.scene.description === 'string' &&
     typeof value.scene.playerCount === 'number' &&
+    (value.scene.speakTimeoutSeconds === undefined || typeof value.scene.speakTimeoutSeconds === 'number') &&
     isRecord(value.ai) &&
     typeof value.ai.baseUrl === 'string' &&
     typeof value.ai.model === 'string' &&
@@ -103,20 +104,49 @@ export function useGameSocket() {
   const isConnected = ref(false);
   const store = useGameStore();
 
-  const connect = (gameId: string, playerId: string) => {
+  // ── 自动重连机制 ──
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let reconnectAttempts = 0;
+  const MAX_RECONNECT_ATTEMPTS = 8;
+  const BASE_RECONNECT_DELAY = 1000; // 1s 起步，指数退避
+
+  const clearReconnectTimer = () => {
+    if (reconnectTimer !== null) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+  };
+
+  const scheduleReconnect = (gameId: string, playerId: string) => {
+    if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+      store.addAnnounce('连接断开，请刷新页面重试');
+      return;
+    }
+    const delay = BASE_RECONNECT_DELAY * Math.pow(2, reconnectAttempts);
+    reconnectAttempts++;
+    store.addAnnounce(`连接断开，${Math.round(delay / 1000)}秒后重连（第${reconnectAttempts}次）`);
+    reconnectTimer = setTimeout(() => {
+      doConnect(gameId, playerId);
+    }, delay);
+  };
+
+  const doConnect = (gameId: string, playerId: string) => {
     socket.value?.close();
     socket.value = new WebSocket(buildGameSocketUrl(gameId, playerId));
 
     socket.value.onopen = () => {
       isConnected.value = true;
+      reconnectAttempts = 0; // 重置重连计数
     };
 
     socket.value.onclose = () => {
       isConnected.value = false;
+      scheduleReconnect(gameId, playerId);
     };
 
     socket.value.onerror = () => {
       isConnected.value = false;
+      // onclose 会紧接着触发，由 onclose 处理重连
     };
 
     socket.value.onmessage = (event) => {
@@ -129,7 +159,15 @@ export function useGameSocket() {
     };
   };
 
+  const connect = (gameId: string, playerId: string) => {
+    clearReconnectTimer();
+    reconnectAttempts = 0;
+    doConnect(gameId, playerId);
+  };
+
   const disconnect = () => {
+    clearReconnectTimer();
+    reconnectAttempts = MAX_RECONNECT_ATTEMPTS; // 阻止重连
     socket.value?.close();
     socket.value = null;
     isConnected.value = false;

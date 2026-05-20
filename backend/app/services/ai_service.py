@@ -9,6 +9,7 @@ import httpx
 from app.core.config import settings
 from app.core.exceptions import AppError
 from app.domain.enums import GameStatus, MessageType, RoleType
+from app.domain.roles import get_skill, get_mock_speech, SKILL_REGISTRY
 from app.schemas.socket import SocketMessage
 from app.services.game_service import (
     AiRuntimeConfig,
@@ -30,25 +31,27 @@ from app.websocket.broadcaster import manager
 
 logger = logging.getLogger(__name__)
 
+# 防止同一局游戏重复启动 AI 循环
+_cycle_locks: dict[str, asyncio.Lock] = {}
+
 
 def _role_hint(role: RoleType) -> str:
-    return {
-        RoleType.wolf: "你是狼人，要伪装自己，发言简短自然。",
-        RoleType.prophet: "你是预言家，要谨慎表达，不要暴露过多细节。",
-        RoleType.guard: "你是守卫，要尽量保护关键目标，发言时避免暴露身份。",
-        RoleType.civilian: "你是平民，要根据已知信息分析局势。",
-        RoleType.unknown: "你的身份未知，按正常玩家语气发言。",
-    }[role]
+    """使用角色技能注册表获取 AI 提示词"""
+    return get_skill(role).ai_hint
+
+
+_PHASE_HINT = {
+    GameStatus.night: "夜晚阶段",
+    GameStatus.day: "白天阶段",
+    GameStatus.speak: "发言阶段（玩家轮流发言）",
+    GameStatus.vote: "投票阶段",
+    GameStatus.end: "游戏结束",
+}
 
 
 def _mock_speech(player_name: str, role: RoleType, round_no: int) -> str:
-    base = {
-        RoleType.wolf: "我先观察一下大家的发言，暂时不下结论。",
-        RoleType.prophet: "我这轮先记录信息，后面再给出判断。",
-        RoleType.civilian: "我目前还在整理线索，先跟大家讨论。",
-        RoleType.unknown: "我先听听大家的意见，再做判断。",
-    }[role]
-    return f"{player_name}：{base}（第{round_no}轮）"
+    """使用角色技能注册表获取 mock 发言"""
+    return get_mock_speech(role, round_no)
 
 
 def _mock_vote_target(game_id: str, player_id: str) -> str:
@@ -77,10 +80,21 @@ async def _call_openai_compatible(
     response_format: dict[str, str] | None = None,
 ) -> str | None:
     runtime = _effective_ai_config(game_id)
-    if runtime.enable_mock or not runtime.base_url or not runtime.api_key:
+    if runtime.enable_mock:
+        logger.debug("[AI] game=%s mock模式开启，跳过API调用", game_id)
+        return None
+    if not runtime.base_url:
+        logger.warning("[AI] game=%s base_url为空，无法调用API", game_id)
+        return None
+    if not runtime.api_key:
+        logger.warning("[AI] game=%s api_key为空，无法调用API", game_id)
         return None
 
-    return await _post_openai_compatible(runtime, messages, response_format)
+    try:
+        return await _post_openai_compatible(runtime, messages, response_format)
+    except Exception as exc:
+        logger.error("[AI] game=%s API调用失败，回退到模拟: %s", game_id, exc)
+        return None
 
 
 async def _post_openai_compatible(
@@ -88,8 +102,15 @@ async def _post_openai_compatible(
     messages: list[dict[str, str]],
     response_format: dict[str, str] | None = None,
 ) -> str:
+    # 清理 base_url 和 api_key 的前后空白（常见问题：复制粘贴带空格）
+    base_url = runtime.base_url.strip()
+    api_key = runtime.api_key.strip()
+
+    if not base_url or not api_key:
+        raise AppError("API Base URL 或 API Key 为空，无法调用", status_code=400)
+
     payload: dict[str, Any] = {
-        "model": runtime.model,
+        "model": runtime.model.strip(),
         "messages": messages,
         "temperature": runtime.temperature,
         "stream": False,
@@ -98,20 +119,76 @@ async def _post_openai_compatible(
         payload["response_format"] = response_format
 
     headers = {
-        "Authorization": f"Bearer {runtime.api_key}",
+        "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
 
+    url = f"{base_url.rstrip('/')}/chat/completions"
+    logger.info(
+        "[AI] Calling API: url=%s model=%s temperature=%s",
+        url, runtime.model.strip(), runtime.temperature,
+    )
+
     async with httpx.AsyncClient(timeout=runtime.timeout_seconds) as client:
         response = await client.post(
-            f"{runtime.base_url.rstrip('/')}/chat/completions",
+            url,
             headers=headers,
             json=payload,
         )
-        response.raise_for_status()
+
+        # ── 按状态码分类处理，尽可能展示服务端返回的具体错误 ──
+        if response.status_code == 400:
+            body = _safe_response_body(response)
+            logger.error("[AI] 400 Bad Request from %s model=%s body=%s", url, runtime.model, body)
+            raise AppError(
+                f"请求参数错误（400）：API 拒绝了请求。"
+                f"常见原因：①模型名称({runtime.model})不被该服务支持；"
+                f"②请求参数格式不兼容（如 temperature/stream 等）；"
+                f"③API Key 与该服务不匹配。\n"
+                f"服务端返回：{body}",
+                status_code=400,
+            )
+        if response.status_code == 401:
+            logger.error("AI API 401 Unauthorized for %s — check API Key", url)
+            raise AppError(
+                f"认证失败（401）：API Key 无效或已过期。请检查 Key 是否正确，"
+                f"以及是否对应 base_url（{base_url}）的访问权限。",
+                status_code=401,
+            )
+        if response.status_code == 403:
+            logger.error("AI API 403 Forbidden for %s", url)
+            raise AppError(
+                f"权限不足（403）：API Key 没有访问该模型的权限。"
+                f"请检查模型名称（{runtime.model}）是否正确，以及 Key 是否有对应权限。",
+                status_code=403,
+            )
+        if response.status_code == 404:
+            logger.error("AI API 404 Not Found for %s model=%s", url, runtime.model)
+            raise AppError(
+                f"接口未找到（404）：请检查 base_url 是否正确。"
+                f"火山引擎格式：https://ark.cn-beijing.volces.com/api/v3 ，"
+                f"模型应填 endpoint ID（如 ep-xxx），不是 gpt-4o-mini。",
+                status_code=404,
+            )
+        if response.status_code >= 400:
+            body = _safe_response_body(response)
+            logger.error("[AI] %s from %s model=%s body=%s", response.status_code, url, runtime.model, body)
+            raise AppError(
+                f"API 调用失败（{response.status_code}）：{body}",
+                status_code=response.status_code,
+            )
+
         data = response.json()
 
     return data["choices"][0]["message"]["content"]
+
+
+def _safe_response_body(response: httpx.Response) -> str:
+    """安全提取响应体文本，供错误信息展示"""
+    try:
+        return response.text[:500]
+    except Exception:
+        return "(无法读取响应体)"
 
 
 async def test_ai_connection(game_id: str, runtime: AiRuntimeConfig | None = None) -> dict[str, object]:
@@ -132,6 +209,9 @@ async def test_ai_connection(game_id: str, runtime: AiRuntimeConfig | None = Non
 
     try:
         content = await _post_openai_compatible(runtime, messages)
+    except AppError:
+        # 已经是友好错误信息（400/401/403/404等），直接透传
+        raise
     except (httpx.HTTPError, KeyError, ValueError) as exc:
         logger.exception("AI connection test failed for game %s", game_id)
         raise AppError(f"AI 连通性测试失败：{exc}", status_code=502) from exc
@@ -152,62 +232,118 @@ async def _generate_ai_speech(game_id: str, player_id: str) -> str:
     if player is None:
         return "我暂时没有发言。"
 
+    # ── 更新压缩记忆 ──
+    from app.services.memory_service import memory_manager, update_structured_memory_from_game
+    store = memory_manager.get_or_create(game_id, player_id, player.name, player.role)
+    update_structured_memory_from_game(store, game.players, game_id)
+
+    # 把最近发言灌入滑动窗口
+    for chat in game.chats[-8:]:
+        store.record_speech(str(chat.get("playerName", "?")), str(chat.get("content", "")))
+
+    # ── 构建游戏上下文（使用压缩记忆） ──
+    phase_hint = _PHASE_HINT.get(game.game_status, "未知阶段")
+
+    # 同阵营队友信息（使用注册表判断阵营）
+    teammate_info = ""
+    player_skill = get_skill(player.role)
+    if player_skill.faction == "wolf":
+        teammates = [
+            p.name for p in game.players
+            if SKILL_REGISTRY[p.role].faction == "wolf" and p.id != player_id and p.is_alive
+        ]
+        if teammates:
+            teammate_info = f"\n你的狼人队友：{'、'.join(teammates)}（你们需要配合投票和击杀）"
+
+    # 压缩后的上下文（替代原始发言记录）
+    compressed_context = store.build_context(max_tokens=1500)
+
     messages = [
         {
             "role": "system",
-            "content": "你是狼人杀对局中的AI玩家，只输出一句中文发言，不要加引号，不要输出JSON。",
+            "content": (
+                "你是在玩狼人杀的AI玩家。请用一句自然的中文发言，不要加引号，不要输出JSON，"
+                "不要重复别人的话，不要暴露自己的AI身份。发言要像真人玩家一样有逻辑和情感。"
+            ),
         },
         {
             "role": "user",
             "content": (
                 f"{_role_hint(player.role)}\n"
-                f"当前轮次: {game.current_round}\n"
-                f"当前阶段: {game.game_status.value}\n"
-                f"存活玩家: {', '.join(item.name for item in game.players if item.is_alive)}\n"
-                f"你的名字: {player.name}\n"
-                "请给出一句自然的游戏发言。"
+                f"当前阶段：{phase_hint}\n"
+                f"当前轮次：第{game.current_round}轮\n"
+                f"你的名字：{player.name}\n"
+                f"{teammate_info}\n"
+                f"{compressed_context}\n"
+                "请给出你本轮的发言（只用说一句话，自然地参与讨论）。"
             ),
         },
     ]
 
     content = await _call_openai_compatible(game_id, messages)
     if content:
+        logger.info("[AI] game=%s player=%s 使用真实API发言", game_id, player.name)
         return content.strip().strip('"')
+    logger.info("[AI] game=%s player=%s 使用模拟发言", game_id, player.name)
     return _mock_speech(player.name, player.role, game.current_round)
 
 
 async def _generate_ai_vote(game_id: str, player_id: str) -> str:
     """Generate AI vote. Candidate roles are masked as 'unknown' for non-self players
-    to prevent role leakage in the prompt."""
+    to prevent role leakage in the prompt. Wolves can see their teammates."""
     game = get_game_state(game_id)
     player = next((item for item in game.players if item.id == player_id), None)
     if player is None:
         return player_id
 
-    candidates = [
-        {
+    candidates = []
+    for item in game.players:
+        if not item.is_alive or item.id == player_id:
+            continue
+        # 同阵营能看到队友身份，其他角色看到 unknown
+        if SKILL_REGISTRY[player.role].faction == "wolf" and SKILL_REGISTRY[item.role].faction == "wolf":
+            candidate_role = f"{get_skill(item.role).name}（你的队友）"
+        else:
+            candidate_role = "未知"
+        candidates.append({
             "id": item.id,
             "name": item.name,
-            "role": item.role.value if item.id == player_id else RoleType.unknown.value,
+            "role": candidate_role,
             "isAlive": item.is_alive,
-        }
-        for item in game.players
-        if item.is_alive and item.id != player_id
-    ]
+        })
+
     if not candidates:
         return player_id
+
+    # ── 压缩记忆 ──
+    from app.services.memory_service import memory_manager, update_structured_memory_from_game
+    store = memory_manager.get_or_create(game_id, player_id, player.name, player.role)
+    update_structured_memory_from_game(store, game.players, game.game_id)
+    compressed_context = store.build_context(max_tokens=800)
+
+    # 构建投票提示（使用注册表判断阵营）
+    teammate_vote_hint = ""
+    if SKILL_REGISTRY[player.role].faction == "wolf":
+        teammates = [
+            p.name for p in game.players
+            if SKILL_REGISTRY[p.role].faction == "wolf" and p.id != player_id and p.is_alive
+        ]
+        if teammates:
+            teammate_vote_hint = f"\n你的狼人队友：{'、'.join(teammates)}，你们应协调投票，不要投队友。"
 
     messages = [
         {
             "role": "system",
-            "content": "你是狼人杀对局中的AI玩家，只输出一个要投票的玩家ID，不要解释，不要输出JSON。",
+            "content": "你是在玩狼人杀的AI玩家，现在处于投票阶段。只输出一个要投票的玩家ID，不要解释，不要输出JSON。",
         },
         {
             "role": "user",
             "content": (
-                f"你的身份: {player.role.value}\n"
-                f"当前轮次: {game.current_round}\n"
-                f"候选名单: {json.dumps(candidates, ensure_ascii=False)}\n"
+                f"你的身份：{_role_hint(player.role)}\n"
+                f"当前轮次：第{game.current_round}轮\n"
+                f"候选名单：{json.dumps(candidates, ensure_ascii=False)}\n"
+                f"{teammate_vote_hint}\n"
+                f"{compressed_context}\n"
                 "请直接返回你要投票的玩家ID。"
             ),
         },
@@ -217,35 +353,41 @@ async def _generate_ai_vote(game_id: str, player_id: str) -> str:
     if content:
         target_id = content.strip().strip('"')
         if any(candidate["id"] == target_id for candidate in candidates):
+            logger.info("[AI] game=%s player=%s 使用真实API投票→%s", game_id, player.name, target_id)
             return target_id
+        logger.warning("[AI] game=%s player=%s API返回无效投票ID=%s，回退模拟", game_id, player.name, target_id)
+    logger.info("[AI] game=%s player=%s 使用模拟投票", game_id, player.name)
     return _mock_vote_target(game_id, player_id)
 
 
 async def _generate_ai_night_action(game_id: str, player_id: str) -> str:
-    """Generate AI night action target.
-    - Wolf: randomly pick an alive non-wolf player to kill.
-    - Prophet: randomly pick an alive non-self player to check.
-    - Guard: randomly pick an alive non-self player to protect.
-    Returns target_id.
+    """Generate AI night action target using RoleSkill registry.
+    - Uses skill.night_action_type to determine behavior
+    - Uses skill.faction to determine valid targets
+    Returns target_id or empty string.
     """
     game = get_game_state(game_id)
     player = next((item for item in game.players if item.id == player_id), None)
     if player is None:
         return ""
 
-    if player.role == RoleType.wolf:
-        targets = [p for p in game.players if p.is_alive and p.role != RoleType.wolf and p.id != player_id]
-    elif player.role == RoleType.prophet:
-        targets = [p for p in game.players if p.is_alive and p.id != player_id]
-    elif player.role == RoleType.guard:
-        targets = [p for p in game.players if p.is_alive and p.id != player_id]
-        if player.last_guard_target_id:
-            filtered = [p for p in targets if p.id != player.last_guard_target_id]
-            if filtered:
-                targets = filtered
-    else:
-        # Other roles have no night action; return empty
+    skill = get_skill(player.role)
+    if not skill.has_night_action:
         return ""
+
+    # 构建目标列表
+    if skill.faction == "wolf":
+        # 狼人：选非狼人存活玩家
+        targets = [p for p in game.players if p.is_alive and SKILL_REGISTRY[p.role].faction != "wolf" and p.id != player_id]
+    else:
+        # 好人阵营：选存活非己玩家
+        targets = [p for p in game.players if p.is_alive and p.id != player_id]
+
+    # 守卫不能连续守同一人
+    if not skill.consecutive_target_allowed and player.last_guard_target_id:
+        filtered = [p for p in targets if p.id != player.last_guard_target_id]
+        if filtered:
+            targets = filtered
 
     if not targets:
         return ""
@@ -319,7 +461,9 @@ async def run_ai_cycle(game_id: str) -> None:
             )
 
             # Wait for human night actions
-            await asyncio.sleep(settings.ai_speak_window_seconds)
+            game = get_game_state(game_id)
+            speak_timeout = game.room_settings.scene.speak_timeout_seconds
+            await asyncio.sleep(speak_timeout)
 
             # Resolve night
             night_result = resolve_night(game_id)
@@ -459,7 +603,9 @@ async def run_ai_cycle(game_id: str) -> None:
                     )
                     await asyncio.sleep(0.2)
                 else:
-                    deadline = asyncio.get_running_loop().time() + settings.ai_speak_window_seconds
+                    game_ref = get_game_state(game_id)
+                    speak_timeout = game_ref.room_settings.scene.speak_timeout_seconds
+                    deadline = asyncio.get_running_loop().time() + speak_timeout
                     while asyncio.get_running_loop().time() < deadline:
                         current_game = get_game_state(game_id)
                         if current_game.speak_turn_submitted:
@@ -545,4 +691,21 @@ async def run_ai_cycle(game_id: str) -> None:
 
 
 def launch_ai_cycle(game_id: str) -> None:
-    asyncio.create_task(run_ai_cycle(game_id))
+    """启动 AI 游戏循环 — 委托给法官类"""
+    from app.services.judge_service import Judge
+
+    if game_id not in _cycle_locks:
+        _cycle_locks[game_id] = asyncio.Lock()
+
+    async def _guarded_launch() -> None:
+        lock = _cycle_locks[game_id]
+        if lock.locked():
+            return
+        async with lock:
+            game = get_game_state(game_id)
+            if game.ai_cycle_running or game.winner_faction is not None:
+                return
+            judge = Judge(game_id)
+            await judge.run_game()
+
+    asyncio.create_task(_guarded_launch())

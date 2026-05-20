@@ -26,28 +26,9 @@ body {
   gap: 12px;
 }
 
-.game-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: 16px;
-}
-
 .round-label {
   display: inline-block;
   margin-left: 8px;
   color: #6b7280;
   font-size: 12px;
-}
-
-.chat-box {
-  display: grid;
-  gap: 8px;
-  margin-bottom: 12px;
-}
-
-.chat-item {
-  display: grid;
-  gap: 4px;
-  padding: 8px 0;
-  border-bottom: 1px solid #eef2f7;
 }

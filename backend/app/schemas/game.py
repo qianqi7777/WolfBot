@@ -33,17 +33,23 @@ class SceneConfig(BaseSchema):
         alias="description",
     )
     player_count: int = Field(default=6, alias="playerCount", ge=2, le=18)
+    speak_timeout_seconds: int = Field(default=15, alias="speakTimeoutSeconds", ge=5, le=120,
+                                        description="每人发言轮次的超时时间（秒）")
 
     @model_validator(mode="before")
     @classmethod
-    def enforce_six_player_preset(cls, data: Any) -> Any:
-        if isinstance(data, dict) and data.get("preset") == "six-player-dark":
-            if "playerCount" in data:
-                data["playerCount"] = 6
-            elif "player_count" in data:
-                data["player_count"] = 6
-            else:
-                data["playerCount"] = 6
+    def sync_preset_to_fields(cls, data: Any) -> Any:
+        """根据 preset 自动填充 name/description/playerCount"""
+        from app.domain.roles import SCENE_PRESETS
+        if isinstance(data, dict):
+            preset_id = data.get("preset") or data.get("preset_id")
+            if preset_id and preset_id in SCENE_PRESETS:
+                p = SCENE_PRESETS[preset_id]
+                if "name" not in data and "name" not in data:
+                    data["name"] = p.name
+                if "description" not in data:
+                    data["description"] = p.description
+                data["playerCount"] = p.player_count
         return data
 
 

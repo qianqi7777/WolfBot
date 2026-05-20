@@ -1,35 +1,41 @@
 <template>
-  <div class="page-shell game-grid">
-    <GameStatus :status="store.gameStatus" :round="store.currentRound" />
-    <PlayerList :players="store.players" />
-    <RoleCard :role="store.myRole" />
-    <Announce :announcements="store.announceList" />
-    <el-alert
-      v-if="currentSpeakerName"
-      :title="`轮到 ${currentSpeakerName} 发言`"
-      type="info"
-      show-icon
-      :closable="false"
-    />
-    <ChatBox
-      :messages="store.chatList"
-      :disabled="!canPlayerSpeakNow"
-      @submit="submitSpeak"
-    />
-    <VotePanel
-      :players="store.alivePlayers"
-      :disabled="!canPlayerVote(store.gameStatus, selfPlayer ?? undefined)"
-      :current-player-id="store.myId"
-      @submit="submitVote"
-    />
-    <NightAction
-      v-if="showNightAction"
-      :role="store.myRole"
-      :players="store.alivePlayers"
-      :current-player-id="store.myId"
-      :night-result="store.nightResult"
-      @submit="submitNightActionHandler"
-    />
+  <div class="page-shell game-layout">
+    <!-- 左栏：操作区 -->
+    <div class="game-left">
+      <GameStatus :status="store.gameStatus" :round="store.currentRound" />
+      <RoleCard :role="store.myRole" />
+      <el-alert
+        v-if="currentSpeakerName"
+        :title="`轮到 ${currentSpeakerName} 发言`"
+        type="info"
+        show-icon
+        :closable="false"
+      />
+      <ChatBox
+        :messages="store.chatList"
+        :disabled="!canPlayerSpeakNow"
+        @submit="submitSpeak"
+      />
+      <VotePanel
+        :players="store.alivePlayers"
+        :disabled="!canPlayerVote(store.gameStatus, selfPlayer ?? undefined)"
+        :current-player-id="store.myId"
+        @submit="submitVote"
+      />
+      <NightAction
+        v-if="showNightAction"
+        :role="store.myRole"
+        :players="store.alivePlayers"
+        :current-player-id="store.myId"
+        :night-result="store.nightResult"
+        @submit="submitNightActionHandler"
+      />
+    </div>
+    <!-- 右栏：信息流 -->
+    <div class="game-right">
+      <PlayerList :players="store.players" />
+      <Announce :announcements="store.announceList" />
+    </div>
   </div>
 </template>
 
@@ -129,3 +135,39 @@ onUnmounted(() => {
   disconnect();
 });
 </script>
+
+<style scoped>
+.game-layout {
+  display: grid;
+  grid-template-columns: 1fr 320px;
+  gap: 16px;
+  align-items: start;
+}
+
+.game-left {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.game-right {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  position: sticky;
+  top: 24px;
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+}
+
+@media (max-width: 768px) {
+  .game-layout {
+    grid-template-columns: 1fr;
+  }
+  .game-right {
+    position: static;
+    max-height: none;
+  }
+}
+</style>

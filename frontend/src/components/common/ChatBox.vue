@@ -33,3 +33,21 @@ const handleSend = () => {
   draft.value = '';
 };
 </script>
+
+<style scoped>
+.chat-box {
+  max-height: 300px;
+  overflow-y: auto;
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding-right: 4px;
+}
+
+.chat-item {
+  display: grid;
+  gap: 4px;
+  padding: 8px 0;
+  border-bottom: 1px solid #eef2f7;
+}
+</style>

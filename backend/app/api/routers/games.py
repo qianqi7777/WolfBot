@@ -65,6 +65,17 @@ async def start_game_route(game_id: str) -> GameSnapshot:
             },
         ).model_dump_json(),
     )
+    # 向所有已连接的真人玩家推送其角色信息
+    from app.services.game_service import get_game_state
+    game = get_game_state(game_id)
+    for player in game.players:
+        if not player.is_ai:
+            role_msg = SocketMessage(
+                type=MessageType.role_info,
+                timestamp=utc_now_iso(),
+                payload={"role": player.role.value},
+            ).model_dump_json()
+            await manager.send_to_player(game_id, player.id, role_msg)
     return snapshot
 
 
