@@ -3,11 +3,12 @@
     <template #header>投票面板</template>
     <el-radio-group v-model="selected">
       <el-radio-button v-for="player in votablePlayers" :key="player.id" :value="player.id">
-        {{ player.seatNumber }}号
+        {{ player.seatNumber }}号({{ player.name }})
       </el-radio-button>
     </el-radio-group>
     <div class="actions">
-      <el-button type="danger" :disabled="disabled || !selected" @click="handleVote">投票</el-button>
+      <el-button type="danger" :disabled="disabled || !selected || selected === 'abstain'" @click="handleVote">投票</el-button>
+      <el-button type="info" :disabled="disabled" @click="handleAbstain">弃票</el-button>
     </div>
   </el-card>
 </template>
@@ -34,8 +35,14 @@ const votablePlayers = computed(() =>
 );
 
 const handleVote = () => {
-  if (props.disabled || !selected.value) return;
+  if (props.disabled || !selected.value || selected.value === 'abstain') return;
   emit('submit', selected.value);
+  selected.value = '';
+};
+
+const handleAbstain = () => {
+  if (props.disabled) return;
+  emit('submit', 'abstain');
   selected.value = '';
 };
 </script>

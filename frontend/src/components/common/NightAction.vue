@@ -5,13 +5,21 @@
       <template v-if="role === 'wolf'">
         <p>请选择要击杀的目标：</p>
         <p v-if="teammates.length" class="teammate-hint">你的狼人队友：{{ teammates.join('、') }}</p>
+        <!-- 狼人队友的实时选择 -->
+        <div v-if="wolfTargetUpdates.length" class="wolf-target-updates">
+          <div v-for="update in wolfTargetUpdates" :key="update.wolfId" class="wolf-target-item">
+            <el-tag type="warning" size="small">{{ update.wolfSeat }}号</el-tag>
+            <span class="wolf-target-arrow">→</span>
+            <el-tag type="danger" size="small">{{ update.targetSeat }}号</el-tag>
+          </div>
+        </div>
         <el-radio-group v-model="selectedTarget" :disabled="disabled">
           <el-radio
             v-for="player in targetPlayers"
             :key="player.id"
             :value="player.id"
           >
-            {{ player.seatNumber }}号{{ player.isAI ? '（AI）' : '' }}
+            {{ player.seatNumber }}号({{ player.name }})
           </el-radio>
         </el-radio-group>
         <el-button
@@ -33,7 +41,7 @@
             :key="player.id"
             :value="player.id"
           >
-            {{ player.seatNumber }}号{{ player.isAI ? '（AI）' : '' }}
+            {{ player.seatNumber }}号({{ player.name }})
           </el-radio>
         </el-radio-group>
         <el-button
@@ -63,7 +71,7 @@
             :key="player.id"
             :value="player.id"
           >
-            {{ player.seatNumber }}号{{ player.isAI ? '（AI）' : '' }}
+            {{ player.seatNumber }}号({{ player.name }})
           </el-radio>
         </el-radio-group>
         <el-button
@@ -94,7 +102,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 
-import type { Player, RoleType } from '@/types/game';
+import type { Player, RoleType, WolfTargetUpdate } from '@/types/game';
 import { ROLE_LABELS } from '@/utils/constants';
 
 const props = defineProps<{
@@ -109,6 +117,7 @@ const props = defineProps<{
     guardBlocked?: boolean;
   } | null;
   teammateSeats?: string[];
+  wolfTargetUpdates?: WolfTargetUpdate[];
 }>();
 
 const emit = defineEmits<{
@@ -120,6 +129,9 @@ const roleLabels = ROLE_LABELS;
 
 /** 狼人队友（从后端推送的 teammates 数据） */
 const teammates = computed(() => props.teammateSeats ?? []);
+
+/** 狼人队友的实时刀目标 */
+const wolfTargetUpdates = computed(() => props.wolfTargetUpdates ?? []);
 
 /** 目标玩家：仅存活的玩家，狼人可以选自己（自刀） */
 const targetPlayers = computed(() => {
@@ -161,5 +173,24 @@ const handleSubmit = () => {
 }
 .check-result {
   margin-top: 12px;
+}
+.wolf-target-updates {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding: 8px;
+  background: #fdf6ec;
+  border-radius: 4px;
+  border: 1px solid #faecd8;
+}
+.wolf-target-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.wolf-target-arrow {
+  color: #e6a23c;
+  font-weight: bold;
 }
 </style>

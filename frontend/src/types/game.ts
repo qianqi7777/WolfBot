@@ -1,8 +1,10 @@
-export type GameStatus = 'waiting' | 'night' | 'day' | 'speak' | 'vote' | 'end';
+export type GameStatus = 'waiting' | 'role_select' | 'night' | 'day' | 'speak' | 'vote' | 'end';
 
 export type RoleType = 'wolf' | 'civilian' | 'prophet' | 'guard' | 'hunter' | 'witch' | 'unknown';
 
 export type ScenePreset = 'six-player-dark' | 'nine-player-dark' | 'twelve-player-dark';
+
+export type GameMode = 'classic' | 'role_select';
 
 export interface SceneConfig {
   preset: ScenePreset;
@@ -10,6 +12,7 @@ export interface SceneConfig {
   description: string;
   playerCount: number;
   speakTimeoutSeconds: number;
+  mode: GameMode;
   rules?: Record<string, unknown>;
 }
 
@@ -70,6 +73,14 @@ export interface VoteData {
   targetSeat?: number;
 }
 
+export interface WolfTargetUpdate {
+  wolfId: string;
+  wolfSeat: number;
+  targetId: string;
+  targetSeat: number;
+  message: string;
+}
+
 export interface VoteSummaryPayload {
   votes: VoteData[];
   eliminated: string | null;
@@ -81,6 +92,29 @@ export interface AnnounceMessage {
   time: string;
 }
 
+export interface ContributionEntry {
+  playerId: string;
+  playerName: string;
+  role: string;
+  faction: string;
+  score: number;
+  isAlive: boolean;
+  isAI: boolean;
+  details: string[];
+}
+
+export interface RoundEvent {
+  type: 'night' | 'vote';
+  round: number;
+  killed_player_id?: string | null;
+  guard_blocked?: boolean;
+  prophet_checks?: Array<{ prophet_id: string; target_id: string; is_wolf: boolean }>;
+  guard_saves?: Array<{ guard_id: string; target_id: string; saved: boolean }>;
+  wolf_kills?: Array<{ wolf_id: string; target_id: string }>;
+  votes?: Array<{ voterId: string; targetId: string }>;
+  eliminated_id?: string | null;
+}
+
 export interface GameResultPayload {
   gameId: string;
   winnerFaction: string;
@@ -88,6 +122,10 @@ export interface GameResultPayload {
   players: Player[];
   chats: ChatMessage[];
   announcements: string[];
+  roundEvents: RoundEvent[];
+  contributions: ContributionEntry[];
+  mvp: ContributionEntry | null;
+  svp: ContributionEntry | null;
 }
 
 export interface SpeakTurnPayload {
@@ -113,6 +151,26 @@ export interface NightResultPayload {
   checkedRole: RoleType | null;
 }
 
+// 抢身份开始载荷
+export interface RoleSelectStartPayload {
+  availableRoles: string[];
+  timeoutSeconds: number;
+  message: string;
+  deadline: string;
+  totalSeconds: number;
+}
+
+// 抢身份选择载荷
+export interface RoleSelectChoicePayload {
+  role: string;
+}
+
+// 抢身份结果载荷
+export interface RoleSelectResultPayload {
+  assignments: Array<{ playerId: string; assignedRole: string }>;
+  message: string;
+}
+
 export interface GameSnapshot {
   gameId: string;
   playerId: string;
@@ -126,6 +184,7 @@ export interface GameSnapshot {
   nightActionRequired: boolean;
   roomSettings: RoomSettings;
   ownerPlayerId?: string;
+  gameMode: GameMode;
 }
 
 export interface SocketMessage<TPayload = Record<string, unknown>> {
@@ -143,6 +202,10 @@ export interface SocketMessage<TPayload = Record<string, unknown>> {
     | 'night_action'
     | 'night_result'
     | 'speak_turn'
+    | 'wolf_target_update'
+    | 'role_select_start'
+    | 'role_select_choice'
+    | 'role_select_result'
     | 'error';
   payload?: TPayload;
   timestamp?: string;

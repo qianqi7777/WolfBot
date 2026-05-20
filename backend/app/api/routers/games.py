@@ -6,6 +6,7 @@ from app.schemas.socket import SocketMessage
 from app.services.game_service import (
     create_game,
     get_game,
+    get_game_state,
     get_result,
     join_game,
     record_night_action,
@@ -62,32 +63,59 @@ async def start_game_route(game_id: str) -> GameSnapshot:
                 "status": snapshot.game_status.value,
                 "currentRound": snapshot.current_round,
                 "currentSpeakerId": snapshot.current_speaker_id,
+                "gameMode": snapshot.game_mode,
             },
         ).model_dump_json(),
     )
-    # 向所有已连接的真人玩家推送其角色信息
-    from app.services.game_service import get_game_state
-    game = get_game_state(game_id)
-    for player in game.players:
-        if not player.is_ai:
-            role_msg = SocketMessage(
-                type=MessageType.role_info,
-                timestamp=utc_now_iso(),
-                payload={"role": player.role.value},
-            ).model_dump_json()
-            await manager.send_to_player(game_id, player.id, role_msg)
+    # 抢身份模式下不立即推送角色信息，等抢身份阶段结束后由 Judge 发送
+    if snapshot.game_status.value != "role_select":
+        from app.services.game_service import get_game_state
+        game = get_game_state(game_id)
+        for player in game.players:
+            if not player.is_ai:
+                role_msg = SocketMessage(
+                    type=MessageType.role_info,
+                    timestamp=utc_now_iso(),
+                    payload={"role": player.role.value},
+                ).model_dump_json()
+                await manager.send_to_player(game_id, player.id, role_msg)
     return snapshot
 
 
 @router.post("/{game_id}/action/speak")
 async def speak_route(game_id: str, payload: SpeakRequest) -> dict[str, str]:
     record_speak(game_id, payload.player_id, payload.content)
+    # 广播发言消息，确保所有玩家（包括发言者自己）能看到
+    game = get_game_state(game_id)
+    speaker = next((p for p in game.players if p.id == payload.player_id), None)
+    display_name = f"{speaker.seat_number}号({speaker.name})" if speaker else "玩家"
+    await manager.broadcast(
+        game_id,
+        SocketMessage(
+            type=MessageType.player_speak,
+            timestamp=utc_now_iso(),
+            payload={
+                "content": payload.content,
+                "playerId": payload.player_id,
+                "playerName": display_name,
+                "isAI": speaker.is_ai if speaker else False,
+            },
+        ).model_dump_json(),
+    )
     return {"status": "accepted"}
 
 
 @router.post("/{game_id}/action/vote")
 async def vote_route(game_id: str, payload: VoteRequest) -> dict[str, str]:
     record_vote(game_id, payload.player_id, payload.target_id)
+    await manager.broadcast(
+        game_id,
+        SocketMessage(
+            type=MessageType.vote_result,
+            timestamp=utc_now_iso(),
+            payload={"targetId": payload.target_id, "voterId": payload.player_id},
+        ).model_dump_json(),
+    )
     return {"status": "accepted"}
 
 

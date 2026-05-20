@@ -35,6 +35,15 @@
             <el-input-number v-model="settingsForm.scene.speakTimeoutSeconds" :min="5" :max="120" :step="5" />
             <span style="margin-left: 8px; color: #909399; font-size: 12px">每人轮流发言的超时时间</span>
           </el-form-item>
+          <el-form-item label="游戏模式">
+            <el-select v-model="settingsForm.scene.mode" placeholder="选择模式">
+              <el-option label="经典模式" value="classic" />
+              <el-option label="抢身份模式" value="role_select" />
+            </el-select>
+            <span style="margin-left: 8px; color: #909399; font-size: 12px">
+              {{ settingsForm.scene.mode === 'role_select' ? '开局前10秒抢身份，多人抢同一角色随机分配' : '系统随机分配角色' }}
+            </span>
+          </el-form-item>
           <el-divider content-position="left">AI 接口配置</el-divider>
           <el-form-item label="API Base URL">
             <el-input v-model="settingsForm.ai.baseUrl" placeholder="例如 https://api.openai.com/v1" />
@@ -152,6 +161,7 @@ function cloneSettings(settings: RoomSettings): RoomSettingsForm {
       description: settings.scene.description,
       playerCount: settings.scene.playerCount,
       speakTimeoutSeconds: settings.scene.speakTimeoutSeconds,
+      mode: settings.scene.mode || 'classic',
     },
     ai: {
       baseUrl: saved.baseUrl || settings.ai.baseUrl,
@@ -166,15 +176,14 @@ function cloneSettings(settings: RoomSettings): RoomSettingsForm {
 
 const settingsForm = reactive<RoomSettingsForm>(cloneSettings(store.roomSettings));
 
-watch(
-  () => store.roomSettings,
-  (settings) => {
-    const next = cloneSettings(settings);
-    Object.assign(settingsForm.scene, next.scene);
-    Object.assign(settingsForm.ai, next.ai);
-  },
-  { immediate: true, deep: true },
-);
+// 只在初始化时同步一次，后续不再自动覆盖用户编辑中的表单
+// 保存设置后由 saveSettings 手动同步
+const initSettingsFromStore = () => {
+  const next = cloneSettings(store.roomSettings);
+  Object.assign(settingsForm.scene, next.scene);
+  Object.assign(settingsForm.ai, next.ai);
+};
+initSettingsFromStore();
 
 watch(
   settingsForm,
@@ -239,6 +248,8 @@ const saveSettings = async () => {
     store.applySnapshot(snapshot, store.myId || snapshot.playerId);
     // 持久化 AI 配置到 localStorage（不含 apiKey）
     saveAiConfigToLocal(settingsForm.ai);
+    // 保存成功后同步表单与 store（保留 apiKey 为空，服务端不会回传）
+    initSettingsFromStore();
     ElMessage.success('设置已保存');
   } catch {
     ElMessage.error('保存设置失败');
@@ -284,6 +295,8 @@ const onPresetChange = (preset: string) => {
 onMounted(async () => {
   if (store.gameId !== props.gameId) {
     await refreshRoom();
+    // 刷新后重新同步表单
+    initSettingsFromStore();
   }
   connect(props.gameId, store.myId);
 });

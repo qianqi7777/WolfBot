@@ -13,6 +13,9 @@ import type {
   VoteData,
   VoteSummaryPayload,
   AiConfigForm,
+  WolfTargetUpdate,
+  RoleSelectStartPayload,
+  GameMode,
 } from '@/types/game';
 
 export interface GameState {
@@ -33,9 +36,15 @@ export interface GameState {
   nightActionRequired: boolean;
   nightResult: NightResultPayload | null;
   wolfTeammates: string[];
+  wolfTargetUpdates: WolfTargetUpdate[];
   roomSettings: RoomSettings;
   ownerPlayerId: string | null;
   deadline: string | null;
+  currentPhaseTimeout: number;
+  // 抢身份相关
+  roleSelectStart: RoleSelectStartPayload | null;
+  mySelectedRole: string | null;
+  gameMode: GameMode;
 }
 
 const SESSION_GAME_ID_KEY = 'wolfbot.gameId';
@@ -83,6 +92,7 @@ function createDefaultRoomSettings(): RoomSettings {
       description: '2狼4好人，神职为预言家和守卫，暗牌局，无警长，节奏快。',
       playerCount: 6,
       speakTimeoutSeconds: 15,
+      mode: 'classic',
     },
     ai: {
       baseUrl: '',
@@ -140,9 +150,14 @@ export const useGameStore = defineStore('game', {
     nightActionRequired: false,
     nightResult: null,
     wolfTeammates: [],
+    wolfTargetUpdates: [],
     roomSettings: createDefaultRoomSettings(),
     ownerPlayerId: null,
     deadline: null,
+    currentPhaseTimeout: 15,
+    roleSelectStart: null,
+    mySelectedRole: null,
+    gameMode: 'classic',
   }),
   getters: {
     alivePlayers: (state) => state.players.filter((player) => player.isAlive),
@@ -172,6 +187,9 @@ export const useGameStore = defineStore('game', {
       this.nightActionRequired = snapshot.nightActionRequired ?? false;
       this.roomSettings = snapshot.roomSettings;
       if (snapshot.ownerPlayerId) this.ownerPlayerId = snapshot.ownerPlayerId;
+      if ((snapshot as Record<string, unknown>).gameMode) {
+        this.gameMode = (snapshot as Record<string, unknown>).gameMode as GameMode;
+      }
       saveSession(this.gameId, this.myId);
     },
     setRoomSettings(roomSettings: RoomSettings) {
@@ -212,6 +230,13 @@ export const useGameStore = defineStore('game', {
     setWolfTeammates(teammates: string[]) {
       this.wolfTeammates = teammates;
     },
+    addWolfTargetUpdate(update: WolfTargetUpdate) {
+      // 同一狼人更新时覆盖旧记录
+      this.wolfTargetUpdates = [
+        ...this.wolfTargetUpdates.filter((u) => u.wolfId !== update.wolfId),
+        update,
+      ];
+    },
     setNightResult(result: NightResultPayload) {
       this.nightResult = result;
     },
@@ -219,6 +244,7 @@ export const useGameStore = defineStore('game', {
       this.nightActionRequired = false;
       this.nightResult = null;
       this.wolfTeammates = [];
+      this.wolfTargetUpdates = [];
     },
     clearVotes() {
       this.voteList = [];
@@ -234,6 +260,18 @@ export const useGameStore = defineStore('game', {
     },
     setDeadline(deadline: string | null) {
       this.deadline = deadline;
+    },
+    setCurrentPhaseTimeout(timeout: number) {
+      this.currentPhaseTimeout = timeout;
+    },
+    setRoleSelectStart(payload: RoleSelectStartPayload) {
+      this.roleSelectStart = payload;
+    },
+    setMySelectedRole(role: string | null) {
+      this.mySelectedRole = role;
+    },
+    setGameMode(mode: GameMode) {
+      this.gameMode = mode;
     },
     addAnnounce(content: string) {
       this.announceList.push({
@@ -280,9 +318,14 @@ export const useGameStore = defineStore('game', {
       this.nightActionRequired = false;
       this.nightResult = null;
       this.wolfTeammates = [];
+      this.wolfTargetUpdates = [];
       this.roomSettings = createDefaultRoomSettings();
       this.ownerPlayerId = null;
       this.deadline = null;
+      this.currentPhaseTimeout = 15;
+      this.roleSelectStart = null;
+      this.mySelectedRole = null;
+      this.gameMode = 'classic';
       clearSession();
     },
   },

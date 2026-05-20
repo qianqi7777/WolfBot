@@ -15,7 +15,7 @@
       >
         <div class="seat-number">{{ seat.number }}号</div>
         <div v-if="seat.player" class="seat-name">
-          {{ seat.player.name }}{{ seat.player.isAI ? '（AI）' : '' }}
+          {{ seat.player.name }}
         </div>
         <div v-else class="seat-empty-label">空位 — 点击入座</div>
       </div>

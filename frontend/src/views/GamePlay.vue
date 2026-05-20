@@ -30,25 +30,45 @@
       <el-card v-if="voteSummaryDisplay" class="vote-summary-card" shadow="always">
         <template #header>投票结果</template>
         <div class="vote-summary-content">
-          <div v-for="item in voteSummaryDisplay" :key="item.targetSeat" class="vote-target-row">
+          <div v-for="item in voteSummaryDisplay.targets" :key="item.targetSeat" class="vote-target-row">
             <div class="vote-target-header">
-              <el-tag type="danger" effect="dark">{{ item.targetSeat }}号</el-tag>
+              <el-tag type="danger" effect="dark">{{ item.targetSeat }}号({{ item.targetName }})</el-tag>
               <span class="vote-count">{{ item.voterSeats.length }}票</span>
             </div>
             <div class="vote-voters">
               <el-tag
-                v-for="seat in item.voterSeats"
+                v-for="(seat, idx) in item.voterSeats"
                 :key="seat"
                 size="small"
                 type="info"
                 class="vote-voter-tag"
               >
-                {{ seat }}号
+                {{ seat }}号({{ item.voterNames[idx] }})
+              </el-tag>
+            </div>
+          </div>
+          <!-- 弃票展示 -->
+          <div v-if="voteSummaryDisplay.abstainVoters.length" class="vote-target-row abstain-row">
+            <div class="vote-target-header">
+              <el-tag type="info" effect="dark">弃票</el-tag>
+              <span class="vote-count">{{ voteSummaryDisplay.abstainVoters.length }}人</span>
+            </div>
+            <div class="vote-voters">
+              <el-tag
+                v-for="av in voteSummaryDisplay.abstainVoters"
+                :key="av.voterSeat"
+                size="small"
+                type="info"
+                class="vote-voter-tag"
+              >
+                {{ av.voterSeat }}号({{ av.voterName }})
               </el-tag>
             </div>
           </div>
         </div>
       </el-card>
+      <!-- 抢身份阶段 -->
+      <RoleSelect v-if="store.gameStatus === 'role_select' && store.roleSelectStart" />
       <NightAction
         v-if="showNightAction"
         :role="store.myRole"
@@ -56,6 +76,7 @@
         :current-player-id="store.myId"
         :night-result="store.nightResult"
         :teammate-seats="store.wolfTeammates"
+        :wolf-target-updates="store.wolfTargetUpdates"
         @submit="submitNightActionHandler"
       />
       <!-- 预言家查验结果独立展示（NightAction提交后组件卸载，结果在此持续显示） -->
@@ -88,6 +109,7 @@ import Announce from '@/components/common/Announce.vue';
 import ChatBox from '@/components/common/ChatBox.vue';
 import CountdownTimer from '@/components/common/CountdownTimer.vue';
 import NightAction from '@/components/common/NightAction.vue';
+import RoleSelect from '@/components/common/RoleSelect.vue';
 import VotePanel from '@/components/common/VotePanel.vue';
 import RoleCard from '@/components/common/RoleCard.vue';
 import GameStatus from '@/components/game/GameStatus.vue';
@@ -103,13 +125,13 @@ const { canPlayerSpeak, canPlayerVote, canPlayerNightAction } = useGameLogic();
 const router = useRouter();
 
 const selfPlayer = computed(() => store.selfPlayer);
-const currentPhaseTimeout = computed(() => store.roomSettings.scene.speakTimeoutSeconds);
+const currentPhaseTimeout = computed(() => store.currentPhaseTimeout);
 const currentSpeakerName = computed(() => {
   if (!store.currentSpeakerId) {
     return '';
   }
   const player = store.players.find((p) => p.id === store.currentSpeakerId);
-  return player ? `${player.seatNumber}号` : '';
+  return player ? `${player.seatNumber}号(${player.name})` : '';
 });
 
 const canPlayerSpeakNow = computed(
@@ -135,21 +157,31 @@ const prophetCheckDisplay = computed(() => {
   };
 });
 
-/** 投票结果汇总：按被投目标分组，显示谁投了谁 */
+/** 投票结果汇总：按被投目标分组，显示谁投了谁；弃票单独展示 */
 const voteSummaryDisplay = computed(() => {
   if (!store.voteSummary?.votes.length) return null;
-  // 按 targetSeat 分组
-  const grouped: Record<number, { targetSeat: number; voterSeats: number[] }> = {};
+  // 按 targetSeat 分组（弃票 'abstain' 单独处理）
+  const grouped: Record<string, { targetSeat: number; targetName: string; voterSeats: number[]; voterNames: string[] }> = {};
+  const abstainVoters: { voterSeat: number; voterName: string }[] = [];
   for (const v of store.voteSummary.votes) {
-    const tSeat = v.targetSeat ?? store.players.find((p) => p.id === v.targetId)?.seatNumber ?? 0;
-    const vSeat = v.voterSeat ?? store.players.find((p) => p.id === v.voterId)?.seatNumber ?? 0;
-    if (!grouped[tSeat]) {
-      grouped[tSeat] = { targetSeat: tSeat, voterSeats: [] };
+    if (v.targetId === 'abstain') {
+      const vSeat = v.voterSeat ?? store.players.find((p) => p.id === v.voterId)?.seatNumber ?? 0;
+      const vName = store.players.find((p) => p.id === v.voterId)?.name ?? '';
+      abstainVoters.push({ voterSeat: vSeat, voterName: vName });
+    } else {
+      const tSeat = v.targetSeat ?? store.players.find((p) => p.id === v.targetId)?.seatNumber ?? 0;
+      const tName = store.players.find((p) => p.id === v.targetId)?.name ?? '';
+      const vSeat = v.voterSeat ?? store.players.find((p) => p.id === v.voterId)?.seatNumber ?? 0;
+      const vName = store.players.find((p) => p.id === v.voterId)?.name ?? '';
+      if (!grouped[tSeat]) {
+        grouped[tSeat] = { targetSeat: tSeat, targetName: tName, voterSeats: [], voterNames: [] };
+      }
+      grouped[tSeat].voterSeats.push(vSeat);
+      grouped[tSeat].voterNames.push(vName);
     }
-    grouped[tSeat].voterSeats.push(vSeat);
   }
-  // 按票数降序排列
-  return Object.values(grouped).sort((a, b) => b.voterSeats.length - a.voterSeats.length);
+  const result = Object.values(grouped).sort((a, b) => b.voterSeats.length - a.voterSeats.length);
+  return { targets: result, abstainVoters };
 });
 
 const getErrorMessage = (error: unknown, fallback: string) => {
@@ -278,6 +310,11 @@ onUnmounted(() => {
 
 .vote-voter-tag {
   font-size: 12px;
+}
+
+.abstain-row {
+  border-top: 1px dashed var(--el-border-color);
+  padding-top: 8px;
 }
 
 @keyframes fadeIn {

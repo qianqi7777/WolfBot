@@ -24,8 +24,11 @@ from app.domain.roles import (
     get_night_action_roles,
     get_preset_rule,
     DEFAULT_RULES,
+    build_role_list,
 )
+from app.mode import get_mode, BaseGameMode
 from app.schemas.socket import SocketMessage
+from app.schemas.player import Player
 from app.services.game_service import (
     advance_speak_turn,
     begin_speak_turn,
@@ -36,12 +39,19 @@ from app.services.game_service import (
     list_alive_players,
     record_night_action,
     record_speak,
+    record_last_words,
     record_vote,
     resolve_night,
     resolve_vote_round,
     set_deadline,
     set_game_status,
     _check_win_condition,
+    record_role_selection,
+    get_role_selections,
+    clear_role_selections,
+    assign_roles_from_selection,
+    _assign_roles,
+    _assign_seat_numbers,
 )
 from app.services.ai_service import (
     _generate_ai_speech,
@@ -61,7 +71,9 @@ class Judge:
     def __init__(self, game_id: str) -> None:
         self.game_id = game_id
         self._preset_rules: dict[str, Any] = {}
+        self._mode: BaseGameMode | None = None
         self._load_preset_rules()
+        self._load_mode()
 
     def _load_preset_rules(self) -> None:
         """从场景预设加载规则"""
@@ -69,6 +81,15 @@ class Judge:
         preset_id = game.room_settings.scene.preset
         for key in DEFAULT_RULES:
             self._preset_rules[key] = get_preset_rule(preset_id, key)
+
+    def _load_mode(self) -> None:
+        """加载游戏模式"""
+        game = get_game_state(self.game_id)
+        mode_id = game.game_mode
+        try:
+            self._mode = get_mode(mode_id)
+        except ValueError:
+            self._mode = get_mode("classic")
 
     # ------------------------------------------------------------------
     #  工具方法
@@ -102,6 +123,174 @@ class Judge:
         ).model_dump_json()
         await manager.send_to_player(self.game_id, player_id, msg)
 
+    async def _wait_last_words(self, player_id: str, player_name: str, timeout_seconds: int = 30) -> None:
+        """等待玩家发表遗言。设置 current_speaker_id 允许死亡玩家发言。"""
+        game = self._game()
+        game.current_speaker_id = player_id
+        game.speak_turn_submitted = False
+
+        # 设置遗言阶段状态（复用 day 状态，前端通过 currentSpeakerId 判断）
+        deadline = set_deadline(self.game_id, timeout_seconds)
+
+        await self._broadcast(MessageType.speak_turn, {
+            "currentSpeakerId": player_id,
+            "currentSpeakerName": f"{player_name}【遗言】",
+            "turnIndex": 0,
+            "turnCount": 1,
+            "deadline": deadline,
+            "totalSeconds": timeout_seconds,
+            "isLastWords": True,
+        })
+
+        # AI 死亡玩家自动发表遗言
+        player = next((p for p in game.players if p.id == player_id), None)
+        if player and player.is_ai:
+            speech = await _generate_ai_speech(self.game_id, player.id)
+            record_last_words(self.game_id, player.id, speech)
+            await self._broadcast(MessageType.ai_speak, {
+                "content": speech,
+                "playerId": player.id,
+                "playerName": f"{player.seat_number}号({player.name})【遗言】",
+                "isAI": True,
+            })
+            clear_deadline(self.game_id)
+            game.current_speaker_id = None
+            game.speak_turn_submitted = False
+            return
+
+        # 等待真人遗言
+        logger.info("[Judge] game=%s 等待 %s 遗言，超时=%ds", self.game_id, player_name, timeout_seconds)
+        end_time = asyncio.get_running_loop().time() + timeout_seconds
+        while asyncio.get_running_loop().time() < end_time:
+            current_game = self._game()
+            if current_game.speak_turn_submitted:
+                break
+            await asyncio.sleep(0.25)
+
+        clear_deadline(self.game_id)
+        game.current_speaker_id = None
+        game.speak_turn_submitted = False
+
+    # ------------------------------------------------------------------
+    #  抢身份阶段
+    # ------------------------------------------------------------------
+
+    async def role_select_phase(self) -> bool:
+        """执行抢身份阶段。返回 True 表示成功进入下一阶段。"""
+        game = self._game()
+        set_game_status(self.game_id, GameStatus.role_select)
+
+        # 广播抢身份开始
+        payload = await self._mode.on_role_select_start(self.game_id)
+        timeout_seconds = self._mode.role_select_timeout_seconds
+        deadline = set_deadline(self.game_id, timeout_seconds)
+
+        await self._broadcast(MessageType.game_status, {
+            "status": GameStatus.role_select.value,
+            "currentRound": game.current_round,
+        })
+        await self._broadcast(MessageType.role_select_start, {
+            **payload,
+            "deadline": deadline,
+            "totalSeconds": timeout_seconds,
+        })
+        await self._announce("抢身份阶段开始！请选择你想要的身份")
+
+        # 等待真人选择（超时后自动结算）
+        logger.info("[Judge] game=%s 等待抢身份选择，超时=%ds", self.game_id, timeout_seconds)
+        await asyncio.sleep(timeout_seconds)
+        clear_deadline(self.game_id)
+
+        # 结算抢身份
+        selections = get_role_selections(self.game_id)
+        available_roles = build_role_list(game.room_settings.scene.preset)
+
+        # AI玩家不参与抢身份，直接分配
+        human_selections = {
+            pid: role for pid, role in selections.items()
+            if not next((p for p in game.players if p.id == pid), Player(id="", name="", seat_number=0, role=RoleType.unknown, is_ai=True, is_alive=True)).is_ai
+        }
+
+        # 解决冲突
+        role_assignments = await self._mode.resolve_role_selection(
+            self.game_id, human_selections, available_roles
+        )
+
+        # 将未抢到/未选择身份的人类玩家和AI玩家都分配剩余角色
+        human_players = [p for p in game.players if not p.is_ai]
+        unassigned_humans = [p for p in human_players if p.id not in role_assignments]
+        ai_players = [p for p in game.players if p.is_ai]
+
+        # 用计数法扣除已分配角色
+        from collections import Counter
+        assigned_counter: Counter[RoleType] = Counter(role_assignments.values())
+        remaining_roles: list[RoleType] = []
+        for r in available_roles:
+            if assigned_counter[r] > 0:
+                assigned_counter[r] -= 1  # 扣除一个
+            else:
+                remaining_roles.append(r)  # 剩余的留给未分配玩家
+        import random
+        random.shuffle(remaining_roles)
+
+        # 先分配给未选择/未抢到的人类玩家
+        idx = 0
+        for p in unassigned_humans:
+            if idx < len(remaining_roles):
+                role_assignments[p.id] = remaining_roles[idx]
+                idx += 1
+
+        # 再分配给AI玩家
+        for p in ai_players:
+            if idx < len(remaining_roles):
+                role_assignments[p.id] = remaining_roles[idx]
+                idx += 1
+
+        # 应用分配结果
+        assign_roles_from_selection(self.game_id, role_assignments)
+
+        # 公布抢身份结果
+        result_details = []
+        for pid, role in role_assignments.items():
+            player = next((p for p in game.players if p.id == pid), None)
+            if player and not player.is_ai:
+                # 只公布真人玩家的角色（视角隔离，只公布自己）
+                result_details.append({"playerId": pid, "assignedRole": role.value})
+
+        await self._broadcast(MessageType.role_select_result, {
+            "assignments": result_details,
+            "message": "身份分配完成",
+        })
+        await self._announce("抢身份阶段结束，身份已分配")
+
+        # 向每个真人玩家私发其角色
+        for pid, role in role_assignments.items():
+            player = next((p for p in game.players if p.id == pid), None)
+            if player and not player.is_ai:
+                skill = get_skill(role)
+                await self._send_to_player(pid, MessageType.role_info, {
+                    "role": role.value,
+                    "hint": skill.human_hint,
+                })
+                # 狼人队友信息
+                if skill.faction == "wolf":
+                    teammates = [
+                        f"{t.seat_number}号" for t in game.players
+                        if SKILL_REGISTRY[t.role].faction == "wolf"
+                        and t.id != pid
+                        and t.is_alive
+                    ]
+                    if teammates:
+                        await self._send_to_player(pid, MessageType.announce, {
+                            "content": f"你的狼人队友：{'、'.join(teammates)}",
+                        })
+
+        clear_role_selections(self.game_id)
+
+        # 进入夜间阶段
+        set_game_status(self.game_id, GameStatus.night)
+        return True
+
     # ------------------------------------------------------------------
     #  夜间阶段：按序询问各角色技能
     # ------------------------------------------------------------------
@@ -120,9 +309,11 @@ class Judge:
         set_game_status(self.game_id, GameStatus.night)
 
         # 天黑请闭眼
+        night_timeout = self._preset_rules.get("night_action_timeout_seconds", 30)
         await self._broadcast(MessageType.game_status, {
             "status": GameStatus.night.value,
             "currentRound": game.current_round,
+            "totalSeconds": night_timeout,
         })
         await self._announce("天黑请闭眼")
         await asyncio.sleep(1.5)
@@ -140,6 +331,7 @@ class Judge:
         await self._broadcast(MessageType.night_action, {
             "actionRequired": True,
             "deadline": deadline,
+            "totalSeconds": night_timeout,
         })
 
         game = self._game()
@@ -150,6 +342,7 @@ class Judge:
         # 结算夜晚
         logger.info("[Judge] game=%s 结算夜晚", self.game_id)
         night_result = resolve_night(self.game_id)
+        self._last_night_result = night_result  # 保存给 day_phase 使用
         return await self._announce_night_result(night_result)
 
     async def _ask_role(self, game, role_type: RoleType) -> None:
@@ -193,19 +386,23 @@ class Judge:
             await self._send_to_player(human_p.id, MessageType.night_action, payload)
 
     async def _announce_night_result(self, night_result: dict[str, Any]) -> bool:
-        """公布夜晚结算结果。返回 True 表示游戏继续，False 表示结束。"""
+        """处理夜晚结算结果：标记死亡、发送night_result/player_update消息。
+        死亡/平安夜公告移到 day_phase 开头统一公布。
+        返回 True 表示游戏继续，False 表示结束。"""
         killed_id = night_result.get("killed_player_id")
         guarded_player_id = night_result.get("guarded_player_id")
         guard_blocked = night_result.get("guard_blocked", False)
         checked_results = night_result.get("checked_results", [])
 
+        game = self._game()
+        is_first_night = game.current_round == 1
+
         if killed_id:
-            # 有人被杀
+            # 有人被杀：发送 night_result 和 player_update（不再发公告）
             killed_player = next(
                 (p for p in self._game().players if p.id == killed_id), None
             )
-            name = f"{killed_player.seat_number}号玩家" if killed_player else "某玩家"
-            await self._announce(f"昨夜，{name} 被杀害")
+            name = f"{killed_player.seat_number}号({killed_player.name})" if killed_player else "某玩家"
             await self._broadcast(MessageType.night_result, {
                 "killedPlayerId": killed_id,
                 "guardedPlayerId": guarded_player_id,
@@ -217,12 +414,14 @@ class Judge:
                 "isAlive": False,
                 "playerName": name,
             })
-            # 遗言
-            last_words = self._preset_rules.get("last_words_allowed", True)
-            if last_words and killed_player:
-                await self._announce(f"{name} 可以发表遗言")
+            # 遗言：根据模式决定是否允许（首夜/非首夜区分）
+            allow_last_words = False
+            if self._mode:
+                allow_last_words = await self._mode.on_night_death(self.game_id, is_first_night)
+            if allow_last_words and killed_player:
+                await self._announce(f"{name} 可以发表遗言（首夜遗言）")
+                await self._wait_last_words(killed_id, name, timeout_seconds=self._preset_rules.get("last_words_timeout_seconds", 30))
         elif guard_blocked:
-            await self._announce("昨夜是平安夜（守卫成功守住袭击）")
             await self._broadcast(MessageType.night_result, {
                 "killedPlayerId": None,
                 "guardedPlayerId": guarded_player_id,
@@ -230,7 +429,6 @@ class Judge:
                 "checkedResults": checked_results,
             })
         else:
-            await self._announce("昨夜是平安夜")
             await self._broadcast(MessageType.night_result, {
                 "killedPlayerId": None,
                 "guardedPlayerId": None,
@@ -274,6 +472,35 @@ class Judge:
             "currentRound": game.current_round,
         })
         await self._announce("天亮了")
+
+        # ── 汇总昨晚死亡/平安夜公告 ──
+        # 从 night_result 提取信息
+        night_result_data = getattr(self, '_last_night_result', None)
+        if night_result_data:
+            killed_id = night_result_data.get("killed_player_id")
+            guard_blocked = night_result_data.get("guard_blocked", False)
+            if killed_id:
+                killed_player = next((p for p in game.players if p.id == killed_id), None)
+                name = f"{killed_player.seat_number}号({killed_player.name})" if killed_player else "某玩家"
+                if guard_blocked:
+                    await self._announce(f"昨夜是平安夜（守卫成功守住对 {name} 的袭击）")
+                else:
+                    await self._announce(f"昨夜，{name} 被杀害")
+            elif guard_blocked:
+                await self._announce("昨夜是平安夜（守卫成功守住袭击）")
+            else:
+                await self._announce("昨夜是平安夜")
+
+        # 公告存活人数
+        alive_count = sum(1 for p in game.players if p.is_alive)
+        await self._announce(f"当前存活人数：{alive_count}人")
+
+        # 模式钩子：额外公告
+        if self._mode:
+            extra_announces = await self._mode.on_day_start(self.game_id)
+            for msg in extra_announces:
+                await self._announce(msg)
+
         await asyncio.sleep(1.5)
 
         # 发言阶段
@@ -324,8 +551,9 @@ class Judge:
                 "turnIndex": turn_index + 1,
                 "turnCount": len(speak_turn_ids),
                 "deadline": deadline,
+                "totalSeconds": speak_timeout,
             })
-            await self._announce(f"轮到 {speaker.seat_number}号玩家 发言")
+            await self._announce(f"轮到 {speaker.seat_number}号({speaker.name}) 发言")
 
             if speaker and speaker.is_ai:
                 # AI 发言
@@ -335,7 +563,7 @@ class Judge:
                 await self._broadcast(MessageType.ai_speak, {
                     "content": speech,
                     "playerId": speaker.id,
-                    "playerName": speaker.name,
+                    "playerName": f"{speaker.seat_number}号({speaker.name})",
                     "isAI": True,
                 })
                 await asyncio.sleep(0.2)
@@ -370,6 +598,7 @@ class Judge:
             "status": GameStatus.vote.value,
             "currentRound": game.current_round,
             "deadline": deadline,
+            "totalSeconds": vote_timeout,
         })
         await self._announce("现在进入投票阶段，请投票放逐一名玩家")
 
@@ -400,13 +629,13 @@ class Judge:
         game = self._game()
         seat_map = {p.id: p.seat_number for p in game.players}
 
-        # ── 广播投票明细（谁投了谁） ──
+        # ── 广播投票明细（谁投了谁，含弃票） ──
         vote_detail = []
         for v in game.votes:
             voter_id = str(v.get("voterId", ""))
             target_id = str(v.get("targetId", ""))
             voter_seat = seat_map.get(voter_id)
-            target_seat = seat_map.get(target_id)
+            target_seat = seat_map.get(target_id) if target_id != "abstain" else None
             vote_detail.append({
                 "voterId": voter_id,
                 "voterSeat": voter_seat,
@@ -418,36 +647,61 @@ class Judge:
             "eliminated": eliminated_id,
         })
 
-        # ── 统计被投票数 ──
+        # ── 统计被投票数（弃票不计入） ──
         tally: dict[str, int] = {}
         for v in game.votes:
             tid = str(v.get("targetId", ""))
+            if tid == "abstain":
+                continue
             tally[tid] = tally.get(tid, 0) + 1
 
         # 公布票数统计
         tally_lines = []
         for tid, count in sorted(tally.items(), key=lambda x: -x[1]):
             t_seat = seat_map.get(tid)
-            label = f"{t_seat}号玩家" if t_seat else "某玩家"
-            tally_lines.append(f"{label}：{count}票")
+            t_player = next((p for p in self._game().players if p.id == tid), None)
+            label = f"{t_seat}号({t_player.name})" if t_seat and t_player else "某玩家"
+            # 列出投了该目标的玩家
+            voter_names = []
+            for v in game.votes:
+                if str(v.get("targetId", "")) == tid:
+                    voter_id = str(v.get("voterId", ""))
+                    voter = next((p for p in self._game().players if p.id == voter_id), None)
+                    if voter:
+                        voter_names.append(f"{voter.seat_number}号({voter.name})")
+            voter_info = f"（{', '.join(voter_names)}投）" if voter_names else ""
+            tally_lines.append(f"{label}：{count}票{voter_info}")
+        # 弃票信息
+        abstain_voters = []
+        for v in game.votes:
+            if str(v.get("targetId", "")) == "abstain":
+                voter_id = str(v.get("voterId", ""))
+                voter = next((p for p in self._game().players if p.id == voter_id), None)
+                if voter:
+                    abstain_voters.append(f"{voter.seat_number}号({voter.name})")
+        if abstain_voters:
+            tally_lines.append(f"弃票：{', '.join(abstain_voters)}")
         if tally_lines:
-            await self._announce("投票统计：" + "，".join(tally_lines))
+            await self._announce("投票统计：" + "；".join(tally_lines))
 
         if eliminated_id:
             eliminated = next(
                 (p for p in self._game().players if p.id == eliminated_id), None
             )
-            name = f"{eliminated.seat_number}号玩家" if eliminated else "某玩家"
+            name = f"{eliminated.seat_number}号({eliminated.name})" if eliminated else "某玩家"
             await self._announce(f"投票结果：{name} 被放逐")
             await self._broadcast(MessageType.player_update, {
                 "playerId": eliminated_id,
                 "isAlive": False,
                 "playerName": name,
             })
-            # 被放逐者发表遗言
-            last_words = self._preset_rules.get("last_words_allowed", True)
-            if last_words:
+            # 被放逐者发表遗言（由模式决定）
+            allow_last_words = True
+            if self._mode:
+                allow_last_words = await self._mode.on_vote_elimination(self.game_id)
+            if allow_last_words:
                 await self._announce(f"{name} 可以发表遗言")
+                await self._wait_last_words(eliminated_id, name, timeout_seconds=self._preset_rules.get("last_words_timeout_seconds", 30))
         else:
             # 平票或无人出局
             if result.get("gameStatus") == GameStatus.night:
@@ -582,8 +836,18 @@ class Judge:
             return
 
         game.ai_cycle_running = True
-        logger.info("[Judge] game=%s 游戏循环启动", self.game_id)
+        logger.info("[Judge] game=%s 游戏循环启动, 模式=%s", self.game_id, game.game_mode)
         try:
+            # 抢身份阶段（如果模式支持）
+            if self._mode and self._mode.allow_role_select and game.game_status == GameStatus.role_select:
+                try:
+                    continue_game = await self.role_select_phase()
+                    if not continue_game:
+                        return
+                except Exception as exc:
+                    logger.exception("[Judge] game=%s 抢身份阶段异常: %s", self.game_id, exc)
+                    return
+
             max_rounds = self._preset_rules.get("max_rounds", 10)
             while game.current_round <= max_rounds:
                 game = self._game()

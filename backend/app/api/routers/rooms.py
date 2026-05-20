@@ -98,18 +98,19 @@ async def test_ai_connection_route(game_id: str, payload: AiConfigInput | None =
 @router.post("/{game_id}/start", response_model=GameSnapshot)
 async def start_room_route(game_id: str, playerId: str | None = Query(None, alias="playerId")) -> GameSnapshot:
     snapshot = start_room(game_id, requester_id=playerId)
-    # 向真人玩家推送角色信息
-    from app.services.game_service import get_game_state
-    from app.domain.enums import MessageType
-    from app.schemas.socket import SocketMessage
-    from app.utils.time import utc_now_iso
-    game = get_game_state(game_id)
-    for player in game.players:
-        if not player.is_ai:
-            role_msg = SocketMessage(
-                type=MessageType.role_info,
-                timestamp=utc_now_iso(),
-                payload={"role": player.role.value},
-            ).model_dump_json()
-            await manager.send_to_player(game_id, player.id, role_msg)
+    # 抢身份模式下不立即推送角色信息，等抢身份阶段结束后由 Judge 发送
+    if snapshot.game_status.value != "role_select":
+        from app.services.game_service import get_game_state
+        from app.domain.enums import MessageType
+        from app.schemas.socket import SocketMessage
+        from app.utils.time import utc_now_iso
+        game = get_game_state(game_id)
+        for player in game.players:
+            if not player.is_ai:
+                role_msg = SocketMessage(
+                    type=MessageType.role_info,
+                    timestamp=utc_now_iso(),
+                    payload={"role": player.role.value},
+                ).model_dump_json()
+                await manager.send_to_player(game_id, player.id, role_msg)
     return snapshot

@@ -14,9 +14,11 @@ import type {
   SocketMessage,
   VoteData,
   VoteSummaryPayload,
+  WolfTargetUpdate,
+  RoleSelectStartPayload,
 } from '@/types/game';
 
-const GAME_STATUSES: GameStatus[] = ['waiting', 'night', 'day', 'speak', 'vote', 'end'];
+const GAME_STATUSES: GameStatus[] = ['waiting', 'role_select', 'night', 'day', 'speak', 'vote', 'end'];
 const ROLE_TYPES: RoleType[] = ['wolf', 'civilian', 'prophet', 'guard', 'unknown'];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -60,6 +62,7 @@ function isRoomSettings(value: unknown): value is RoomSettings {
     typeof value.scene.description === 'string' &&
     typeof value.scene.playerCount === 'number' &&
     (value.scene.speakTimeoutSeconds === undefined || typeof value.scene.speakTimeoutSeconds === 'number') &&
+    (value.scene.mode === undefined || typeof value.scene.mode === 'string') &&
     isRecord(value.ai) &&
     typeof value.ai.baseUrl === 'string' &&
     typeof value.ai.model === 'string' &&
@@ -224,6 +227,10 @@ export function useGameSocket() {
           if (message.payload.status !== 'speak') {
             store.setCurrentSpeakerId(null);
           }
+          // 抢身份阶段清除
+          if (message.payload.status !== 'role_select') {
+            // 不在抢身份阶段时不清除 roleSelectStart，让结果可显示
+          }
           // 非计时阶段清除倒计时
           if (message.payload.status === 'day' || message.payload.status === 'end' || message.payload.status === 'waiting') {
             store.setDeadline(null);
@@ -238,6 +245,14 @@ export function useGameSocket() {
         // 提取 deadline
         if (typeof message.payload?.deadline === 'string') {
           store.setDeadline(message.payload.deadline);
+        }
+        // 提取 totalSeconds（倒计时进度条总量）
+        if (typeof message.payload?.totalSeconds === 'number') {
+          store.setCurrentPhaseTimeout(message.payload.totalSeconds);
+        }
+        // 提取 gameMode
+        if (typeof message.payload?.gameMode === 'string') {
+          store.setGameMode(message.payload.gameMode as 'classic' | 'role_select');
         }
         break;
       case 'role_info':
@@ -272,6 +287,9 @@ export function useGameSocket() {
           if (typeof payload.deadline === 'string') {
             store.setDeadline(payload.deadline);
           }
+          if (typeof (message.payload as Record<string, unknown>).totalSeconds === 'number') {
+            store.setCurrentPhaseTimeout((message.payload as Record<string, unknown>).totalSeconds as number);
+          }
         }
         break;
       case 'vote_result':
@@ -304,6 +322,10 @@ export function useGameSocket() {
         // 提取 deadline
         if (isRecord(message.payload) && typeof message.payload.deadline === 'string') {
           store.setDeadline(message.payload.deadline);
+        }
+        // 提取 totalSeconds
+        if (isRecord(message.payload) && typeof message.payload.totalSeconds === 'number') {
+          store.setCurrentPhaseTimeout(message.payload.totalSeconds);
         }
         break;
       case 'night_result':
@@ -347,6 +369,41 @@ export function useGameSocket() {
           if (result.killedPlayerId) {
             store.updatePlayerStatus(result.killedPlayerId, false);
           }
+        }
+        break;
+      case 'wolf_target_update':
+        if (isRecord(message.payload) &&
+            typeof message.payload.wolfId === 'string' &&
+            typeof message.payload.wolfSeat === 'number' &&
+            typeof message.payload.targetId === 'string' &&
+            typeof message.payload.targetSeat === 'number' &&
+            typeof message.payload.message === 'string') {
+          store.addWolfTargetUpdate({
+            wolfId: message.payload.wolfId,
+            wolfSeat: message.payload.wolfSeat,
+            targetId: message.payload.targetId,
+            targetSeat: message.payload.targetSeat,
+            message: message.payload.message,
+          } as WolfTargetUpdate);
+        }
+        break;
+      case 'role_select_start':
+        if (isRecord(message.payload) && Array.isArray(message.payload.availableRoles)) {
+          store.setRoleSelectStart({
+            availableRoles: message.payload.availableRoles.filter((r: unknown) => typeof r === 'string'),
+            timeoutSeconds: typeof message.payload.timeoutSeconds === 'number' ? message.payload.timeoutSeconds : 10,
+            message: typeof message.payload.message === 'string' ? message.payload.message : '',
+            deadline: typeof message.payload.deadline === 'string' ? message.payload.deadline : '',
+            totalSeconds: typeof message.payload.totalSeconds === 'number' ? message.payload.totalSeconds : 10,
+          });
+          store.setMySelectedRole(null);
+        }
+        break;
+      case 'role_select_result':
+        if (isRecord(message.payload) && typeof message.payload.message === 'string') {
+          store.addAnnounce(message.payload.message);
+          // 抢身份阶段结束，清除抢身份状态
+          store.setRoleSelectStart(null);
         }
         break;
       case 'game_over':

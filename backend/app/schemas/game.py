@@ -41,6 +41,8 @@ class SceneConfig(BaseSchema):
     player_count: int = Field(default=6, alias="playerCount", ge=2, le=18)
     speak_timeout_seconds: int = Field(default=15, alias="speakTimeoutSeconds", ge=5, le=120,
                                         description="每人发言轮次的超时时间（秒）")
+    mode: str = Field(default="classic", alias="mode",
+                      description="游戏模式：classic(经典) / role_select(抢身份)")
     rules: dict[str, Any] | None = Field(default=None, alias="rules")
 
     @model_validator(mode="before")
@@ -111,6 +113,7 @@ class GameSnapshot(BaseSchema):
     night_action_required: bool = False
     room_settings: RoomSettings
     owner_player_id: str | None = Field(default=None, alias="ownerPlayerId")
+    game_mode: str = Field(default="classic", alias="gameMode")
 
 
 class NightActionRequest(BaseSchema):
@@ -125,3 +128,7 @@ class GameResult(BaseSchema):
     players: list[Player]
     chats: list[dict[str, object]] = Field(default_factory=list)
     announcements: list[str] = Field(default_factory=list)
+    round_events: list[dict[str, object]] = Field(default_factory=list, alias="roundEvents")
+    contributions: list[dict[str, object]] = Field(default_factory=list, alias="contributions")
+    mvp: dict[str, object] | None = Field(default=None, alias="mvp")
+    svp: dict[str, object] | None = Field(default=None, alias="svp")

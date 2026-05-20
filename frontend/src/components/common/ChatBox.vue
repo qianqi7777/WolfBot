@@ -1,7 +1,7 @@
 <template>
   <el-card shadow="never">
     <template #header>发言记录</template>
-    <div class="chat-box">
+    <div ref="chatBoxRef" class="chat-box">
       <div v-for="item in messages" :key="item.id" class="chat-item">
         <strong>{{ item.playerName }}</strong>
         <span>{{ item.content }}</span>
@@ -16,6 +16,8 @@
 </template>
 
 <script setup lang="ts">
+import { nextTick, ref, watch } from 'vue';
+
 const props = defineProps<{
   messages: Array<{ id: string; playerName: string; content: string; time: string }>;
   disabled?: boolean;
@@ -26,11 +28,27 @@ const emit = defineEmits<{
 }>();
 
 const draft = defineModel<string>('draft', { default: '' });
+const chatBoxRef = ref<HTMLElement | null>(null);
+
+/** 自动滚动到底部 */
+const scrollToBottom = () => {
+  nextTick(() => {
+    if (chatBoxRef.value) {
+      chatBoxRef.value.scrollTop = chatBoxRef.value.scrollHeight;
+    }
+  });
+};
+
+// 消息列表变化时自动滚动
+watch(() => props.messages.length, () => {
+  scrollToBottom();
+});
 
 const handleSend = () => {
   if (props.disabled || !draft.value.trim()) return;
   emit('submit', draft.value);
   draft.value = '';
+  scrollToBottom();
 };
 </script>
 

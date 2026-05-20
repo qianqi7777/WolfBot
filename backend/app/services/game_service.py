@@ -105,6 +105,11 @@ class GameState:
     speak_turn_submitted: bool = False
     room_settings: RoomRuntimeSettings = field(default_factory=_default_room_settings)
     deadline: str | None = None  # ISO 8601 UTC 时间戳，null 表示无活跃计时器
+    # 抢身份相关
+    role_selections: dict[str, str] = field(default_factory=dict)  # {player_id: chosen_role}
+    game_mode: str = "classic"  # 游戏模式：classic / role_select
+    # 每轮事件记录（用于贡献率计算）
+    round_events: list[dict[str, object]] = field(default_factory=list)
 
 
 _GAMES: Dict[str, GameState] = {}
@@ -131,11 +136,8 @@ def _assign_seat_numbers(players: list[Player]) -> None:
 
 
 def seat_label(player: Player) -> str:
-    """返回玩家显示标签：'{N}号玩家'（AI附加AI标记）"""
-    tag = f"{player.seat_number}号玩家"
-    if player.is_ai:
-        tag += "(AI)"
-    return tag
+    """返回玩家显示标签：'{N}号({name})'"""
+    return f"{player.seat_number}号({player.name})"
 
 
 def get_seat_map(game_id: str) -> dict[str, int]:
@@ -203,6 +205,7 @@ def _snapshot(game: GameState, player_id: str, my_role: RoleType = RoleType.unkn
         night_action_required=night_action_required,
         room_settings=_room_settings_view(game.room_settings),
         owner_player_id=game.owner_player_id,
+        game_mode=game.game_mode,
     )
 
 
@@ -440,14 +443,28 @@ def start_game(game_id: str, requester_id: str | None = None) -> GameSnapshot:
     if len(game.players) < target_players:
         game.players.extend(_build_ai_players(target_players - len(game.players)))
 
-    _assign_roles(game.players, game.room_settings.scene.preset)
+    # 读取游戏模式
+    game.game_mode = getattr(game.room_settings.scene, 'mode', 'classic') or 'classic'
+
+    if game.game_mode == "role_select":
+        # 抢身份模式：不立即分配角色，等抢身份阶段结束后分配
+        game.started = True
+        game.game_status = GameStatus.role_select
+        game.current_speaker_id = None
+        game.speak_order.clear()
+        game.speak_turn_submitted = False
+        game.announcements.append("游戏开始，进入抢身份阶段")
+    else:
+        # 经典模式：直接分配角色
+        _assign_roles(game.players, game.room_settings.scene.preset)
+        game.started = True
+        game.game_status = GameStatus.night
+        game.current_speaker_id = None
+        game.speak_order.clear()
+        game.speak_turn_submitted = False
+        game.announcements.append("游戏开始")
+
     _assign_seat_numbers(game.players)
-    game.started = True
-    game.game_status = GameStatus.night
-    game.current_speaker_id = None
-    game.speak_order.clear()
-    game.speak_turn_submitted = False
-    game.announcements.append("游戏开始")
     return _snapshot(game, game.owner_player_id, RoleType.unknown)
 
 
@@ -461,7 +478,7 @@ def get_player_role(game_id: str, player_id: str) -> RoleType:
 
 def record_speak(game_id: str, player_id: str, content: str) -> None:
     game = _get_game_or_raise(game_id)
-    if game.game_status != GameStatus.speak:
+    if game.game_status not in (GameStatus.speak, GameStatus.day):
         raise AppError("当前阶段不能发言", status_code=409)
     speaker = next((item for item in game.players if item.id == player_id), None)
     if speaker is None:
@@ -478,7 +495,7 @@ def record_speak(game_id: str, player_id: str, content: str) -> None:
         {
             "id": f"chat-{len(game.chats) + 1}",
             "playerId": speaker.id,
-            "playerName": speaker.name,
+            "playerName": f"{speaker.seat_number}号({speaker.name})",
             "content": content,
             "time": utc_now_iso(),
             "isAI": speaker.is_ai,
@@ -488,18 +505,55 @@ def record_speak(game_id: str, player_id: str, content: str) -> None:
     game.announcements.append("收到一条发言")
 
 
+def record_last_words(game_id: str, player_id: str, content: str) -> None:
+    """记录遗言。允许已死亡玩家在遗言阶段发言。
+    遗言可能发生在夜间（首夜死亡）、投票后（被放逐），此时 game_status 为 night 或 vote，
+    通过 current_speaker_id 限制只有当前遗言者才能发言。"""
+    game = _get_game_or_raise(game_id)
+    if game.game_status not in (GameStatus.day, GameStatus.night, GameStatus.vote):
+        raise AppError("当前不是遗言阶段", status_code=409)
+    speaker = next((item for item in game.players if item.id == player_id), None)
+    if speaker is None:
+        raise AppError("玩家不存在", status_code=404)
+    # 遗言阶段允许死亡玩家发言，但不能是存活的玩家乱发
+    if speaker.is_alive:
+        raise AppError("存活玩家不需要发表遗言", status_code=409)
+    if game.current_speaker_id != speaker.id:
+        raise AppError("当前不是你的遗言轮次", status_code=409)
+    if game.speak_turn_submitted:
+        raise AppError("遗言已提交", status_code=409)
+    game.chats.append(
+        {
+            "id": f"chat-{len(game.chats) + 1}",
+            "playerId": speaker.id,
+            "playerName": f"{speaker.seat_number}号({speaker.name})【遗言】",
+            "content": content,
+            "time": utc_now_iso(),
+            "isAI": speaker.is_ai,
+        }
+    )
+    game.speak_turn_submitted = True
+    game.announcements.append(f"{speaker.seat_number}号({speaker.name}) 发表了遗言")
+
+
 def record_vote(game_id: str, voter_id: str, target_id: str) -> None:
+    """记录投票。target_id 为空或 'abstain' 表示弃票。"""
     game = _get_game_or_raise(game_id)
     if game.game_status != GameStatus.vote:
         raise AppError("当前阶段不能投票", status_code=409)
-    if voter_id == target_id:
+    # 弃票：target_id 为空或 'abstain' 时跳过自己检查
+    is_abstain = not target_id or target_id == "abstain"
+    if not is_abstain and voter_id == target_id:
         raise AppError("不能投票给自己", status_code=409)
     voter = next((item for item in game.players if item.id == voter_id), None)
     if voter is None:
         raise AppError("玩家不存在", status_code=404)
     game.votes = [vote for vote in game.votes if vote.get("voterId") != voter.id]
-    game.votes.append({"voterId": voter.id, "targetId": target_id})
-    game.announcements.append("收到一票")
+    if is_abstain:
+        game.votes.append({"voterId": voter.id, "targetId": "abstain"})
+    else:
+        game.votes.append({"voterId": voter.id, "targetId": target_id})
+    game.announcements.append("收到一票" if not is_abstain else "收到一票弃票")
 
 
 def record_night_action(game_id: str, player_id: str, target_id: str) -> None:
@@ -587,11 +641,59 @@ def resolve_night(game_id: str) -> dict[str, object]:
         killed_player = next((p for p in game.players if p.id == killed_player_id), None)
         if killed_player:
             killed_player.is_alive = False
-            game.announcements.append(f"{killed_player.seat_number}号玩家 在夜晚被杀害")
+            # 记录哪些狼人参与击杀
+            wolf_killers = []
+            for action in game.night_actions:
+                if action.get("role") == RoleType.wolf.value and str(action.get("targetId", "")) == killed_player_id:
+                    killer = next((p for p in game.players if p.id == str(action.get("playerId", ""))), None)
+                    if killer:
+                        wolf_killers.append(f"{killer.seat_number}号({killer.name})")
+            killer_info = "、".join(wolf_killers) if wolf_killers else "狼人"
+            game.announcements.append(f"{killer_info} 夜间击杀了 {killed_player.seat_number}号({killed_player.name})")
     elif blocked_by_guard:
         game.announcements.append("守卫成功守住了狼人袭击")
     elif guard_targets:
         game.announcements.append("守卫完成守护")
+
+    # --- 记录夜间事件（贡献率用） ---
+    round_event: dict[str, object] = {
+        "type": "night",
+        "round": game.current_round,
+        "killed_player_id": killed_player_id,
+        "guard_blocked": blocked_by_guard,
+    }
+    # 预言家查验
+    prophet_checks = []
+    for action in game.night_actions:
+        if action.get("role") == RoleType.prophet.value:
+            target_id = str(action.get("targetId", ""))
+            target = next((p for p in game.players if p.id == target_id), None)
+            prophet_checks.append({
+                "prophet_id": str(action.get("playerId", "")),
+                "target_id": target_id,
+                "is_wolf": target.role == RoleType.wolf if target else False,
+            })
+    round_event["prophet_checks"] = prophet_checks
+    # 守卫守护
+    guard_saves = []
+    for action in game.night_actions:
+        if action.get("role") == RoleType.guard.value:
+            guard_saves.append({
+                "guard_id": str(action.get("playerId", "")),
+                "target_id": str(action.get("targetId", "")),
+                "saved": blocked_by_guard and str(action.get("targetId", "")) == killed_player_id,
+            })
+    round_event["guard_saves"] = guard_saves
+    # 狼人击杀
+    wolf_kills = []
+    for action in game.night_actions:
+        if action.get("role") == RoleType.wolf.value:
+            wolf_kills.append({
+                "wolf_id": str(action.get("playerId", "")),
+                "target_id": str(action.get("targetId", "")),
+            })
+    round_event["wolf_kills"] = wolf_kills
+    game.round_events.append(round_event)
 
     for action in game.night_actions:
         if action.get("role") == RoleType.guard.value:
@@ -642,6 +744,8 @@ def resolve_vote_round(game_id: str, vote_tie_rule: str = "no_elimination") -> d
     tally: dict[str, int] = {}
     for vote in game.votes:
         target_id = str(vote.get("targetId", ""))
+        if target_id == "abstain":
+            continue  # 弃票不计入
         tally[target_id] = tally.get(target_id, 0) + 1
 
     # 检查平票：如果最高票不止一人，则无人出局
@@ -675,7 +779,34 @@ def resolve_vote_round(game_id: str, vote_tie_rule: str = "no_elimination") -> d
     eliminated_player = next((player for player in game.players if player.id == eliminated_id), None)
     if eliminated_player is not None:
         eliminated_player.is_alive = False
-        game.announcements.append(f"{eliminated_player.name} 被投票淘汰")
+        # 记录投票详情：谁投了谁，谁弃票了
+        vote_detail_parts = []
+        abstain_voters = []
+        for vote in game.votes:
+            voter = next((p for p in game.players if p.id == str(vote.get("voterId", ""))), None)
+            target_id_str = str(vote.get("targetId", ""))
+            if target_id_str == "abstain":
+                if voter:
+                    abstain_voters.append(f"{voter.seat_number}号({voter.name})")
+            else:
+                target = next((p for p in game.players if p.id == target_id_str), None)
+                if voter and target:
+                    vote_detail_parts.append(f"{voter.seat_number}号({voter.name})→{target.seat_number}号({target.name})")
+        detail_msg = f"{eliminated_player.seat_number}号({eliminated_player.name}) 被投票淘汰"
+        if vote_detail_parts:
+            detail_msg += f"（{', '.join(vote_detail_parts)}）"
+        if abstain_voters:
+            detail_msg += f"；弃票：{', '.join(abstain_voters)}"
+        game.announcements.append(detail_msg)
+
+    # --- 记录投票事件（贡献率用），在 votes clear 前保存 ---
+    vote_records = [dict(v) for v in game.votes]
+    game.round_events.append({
+        "type": "vote",
+        "round": game.current_round,
+        "votes": vote_records,
+        "eliminated_id": eliminated_player.id if eliminated_player else None,
+    })
 
     game.votes.clear()
     game.current_round += 1
@@ -702,6 +833,13 @@ def resolve_vote_round(game_id: str, vote_tie_rule: str = "no_elimination") -> d
 
 def get_result(game_id: str) -> GameResult:
     game = _get_game_or_raise(game_id)
+
+    # 计算贡献率
+    from app.services.contribution_service import compute_contributions, get_mvp, get_svp
+    contributions = compute_contributions(game.players, game.round_events, game.winner_faction)
+    mvp = get_mvp(contributions, game.winner_faction)
+    svp = get_svp(contributions, game.winner_faction)
+
     return GameResult(
         game_id=game.game_id,
         winner_faction=game.winner_faction or "pending",
@@ -709,4 +847,50 @@ def get_result(game_id: str) -> GameResult:
         players=game.players,
         chats=game.chats,
         announcements=game.announcements,
+        round_events=game.round_events,
+        contributions=contributions,
+        mvp=mvp,
+        svp=svp,
     )
+
+
+def record_role_selection(game_id: str, player_id: str, chosen_role: str) -> None:
+    """记录玩家的抢身份选择"""
+    game = _get_game_or_raise(game_id)
+    if game.game_status != GameStatus.role_select:
+        raise AppError("当前不是抢身份阶段", status_code=409)
+    player = next((p for p in game.players if p.id == player_id), None)
+    if player is None:
+        raise AppError("玩家不存在", status_code=404)
+    if player.is_ai:
+        raise AppError("AI玩家不能抢身份", status_code=409)
+    # 校验角色是否在可用列表中
+    try:
+        RoleType(chosen_role)
+    except ValueError:
+        raise AppError(f"无效的角色类型: {chosen_role}", status_code=400)
+    game.role_selections[player_id] = chosen_role
+
+
+def get_role_selections(game_id: str) -> dict[str, str]:
+    """获取所有玩家的抢身份选择"""
+    game = _get_game_or_raise(game_id)
+    return dict(game.role_selections)
+
+
+def clear_role_selections(game_id: str) -> None:
+    """清空抢身份选择"""
+    game = _get_game_or_raise(game_id)
+    game.role_selections.clear()
+
+
+def assign_roles_from_selection(
+    game_id: str,
+    role_assignments: dict[str, RoleType],
+) -> None:
+    """根据抢身份结果分配角色"""
+    game = _get_game_or_raise(game_id)
+    for player_id, role in role_assignments.items():
+        player = next((p for p in game.players if p.id == player_id), None)
+        if player:
+            player.role = role
