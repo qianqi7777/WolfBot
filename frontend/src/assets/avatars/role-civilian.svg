@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <!-- 平民角色图标：人形 -->
+  <circle cx="32" cy="18" r="10" fill="currentColor"/>
+  <path d="M16 54c0-8.837 7.163-16 16-16s16 7.163 16 16v4H16v-4z" fill="currentColor"/>
+</svg>

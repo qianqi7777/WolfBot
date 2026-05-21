@@ -13,8 +13,11 @@ class Player(BaseSchema):
     is_alive: bool = True
     night_action_done: bool = False
     last_guard_target_id: str | None = Field(default=None, alias="lastGuardTargetId")
+    last_prophet_target_id: str | None = Field(default=None, alias="lastProphetTargetId")
     vote_immunity_used: bool = False  # 白痴翻牌免疫已使用
+    is_idiot_revealed: bool = False  # 白痴是否已翻牌（公开可见）
     is_sheriff: bool = False  # 是否是警长
     antidote_used: bool = False  # 女巫解药已使用
     poison_used: bool = False  # 女巫毒药已使用
     is_spectator: bool = False  # 是否是观战者
+    avatar_url: str | None = Field(default=None, alias="avatarUrl")  # 自定义头像 URL

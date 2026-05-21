@@ -121,6 +121,9 @@ class GameState:
     # 猎人开枪相关
     pending_hunter_shoot: str | None = None  # 待开枪的猎人玩家 ID
     hunter_killed_by_poison: bool = False  # 猎人是否被毒杀（毒杀不能开枪）
+    # 发言方向相关
+    speak_direction: str | None = None  # 发言方向（left/right），由警长选择
+    first_dead_player_id: str | None = None  # 昨夜死亡玩家ID（用于确定发言起点）
     # 房间码
     room_code: str = ""  # 6位房间码，用于联机
 
@@ -234,7 +237,9 @@ def _snapshot(game: GameState, player_id: str, my_role: RoleType = RoleType.unkn
                 is_alive=p.is_alive,
                 night_action_done=p.night_action_done,
                 last_guard_target_id=p.last_guard_target_id,
+                last_prophet_target_id=p.last_prophet_target_id,
                 vote_immunity_used=p.vote_immunity_used,
+                is_idiot_revealed=p.is_idiot_revealed,
                 is_sheriff=p.is_sheriff,
                 antidote_used=p.antidote_used,
                 poison_used=p.poison_used,
@@ -262,19 +267,122 @@ def _snapshot(game: GameState, player_id: str, my_role: RoleType = RoleType.unkn
     )
 
 
-def _alive_speak_order(game: "GameState", speak_order_rule: str = "by_seat") -> list[str]:
-    """根据规则生成发言顺序。by_seat=按座位号, by_random=随机"""
+def _alive_speak_order(
+    game: "GameState",
+    speak_order_rule: str = "by_seat",
+    sheriff_id: str | None = None,
+    first_dead_player_id: str | None = None,
+    speak_direction: str | None = None,
+) -> list[str]:
+    """根据规则生成发言顺序。
+    - by_random: 随机
+    - 有警长（sheriff_id 不为 None）：
+      - 从警长旁边开始，按方向排列（默认"right"顺时针）
+      - 警长放在最后发言
+    - 无警长：
+      - 单死（first_dead_player_id 有值）：从死者座位号下一位开始
+      - 双死/平安夜：随机起始
+    """
     alive = [p for p in game.players if p.is_alive]
     if speak_order_rule == "by_random":
         random.shuffle(alive)
-    else:
-        alive.sort(key=lambda p: p.seat_number)
+        return [p.id for p in alive]
+
+    # 按座位号排序
+    alive.sort(key=lambda p: p.seat_number)
+
+    if sheriff_id:
+        # 有警长：从警长旁边开始，按方向排列
+        sheriff = next((p for p in alive if p.id == sheriff_id), None)
+        if not sheriff:
+            # 警长不在存活列表中（不应发生），回退到按座位
+            return [p.id for p in alive]
+
+        direction = speak_direction or "right"
+        seat_count = len(alive)
+        if seat_count <= 1:
+            return [p.id for p in alive]
+
+        # 找到警长在排序后列表中的索引
+        sheriff_index = next(i for i, p in enumerate(alive) if p.id == sheriff_id)
+
+        # 从警长旁边开始排列（排除警长）
+        others = [p for p in alive if p.id != sheriff_id]
+        if not others:
+            return [p.id for p in alive]
+
+        # 找到警长旁边第一个人的起始位置
+        if direction == "left":
+            # 逆时针：从警长左边（座位号较小方向）的人开始
+            start_index = (sheriff_index - 1) % seat_count
+            # 如果 start_index 指向的是警长自己，再往前移一位
+            if alive[start_index].id == sheriff_id:
+                start_index = (start_index - 1) % seat_count
+        else:
+            # 顺时针：从警长右边（座位号较大方向）的人开始
+            start_index = (sheriff_index + 1) % seat_count
+            if alive[start_index].id == sheriff_id:
+                start_index = (start_index + 1) % seat_count
+
+        # 从 start_index 开始，绕一圈排列其他人
+        start_player = alive[start_index]
+        other_index = next(i for i, p in enumerate(others) if p.id == start_player.id)
+
+        ordered_others = []
+        for i in range(len(others)):
+            ordered_others.append(others[(other_index + i) % len(others)])
+
+        # 警长放最后
+        result = [p.id for p in ordered_others] + [sheriff_id]
+        return result
+
+    # 无警长
+    if first_dead_player_id:
+        # 单死：从死者座位号下一位开始
+        dead_player = next((p for p in game.players if p.id == first_dead_player_id), None)
+        if dead_player:
+            # 找到死者座位号之后第一个存活玩家
+            dead_seat = dead_player.seat_number
+            # 按座位号排序的存活列表中，找第一个座位号 > dead_seat 的玩家
+            start_index = 0
+            for i, p in enumerate(alive):
+                if p.seat_number > dead_seat:
+                    start_index = i
+                    break
+            else:
+                start_index = 0  # 死者座位号最大，从第一个存活玩家开始
+
+            # 从 start_index 开始绕一圈
+            result_ids = []
+            for i in range(len(alive)):
+                result_ids.append(alive[(start_index + i) % len(alive)].id)
+            return result_ids
+
+    # 双死/平安夜：随机起始
+    if alive:
+        start = random.randint(0, len(alive) - 1)
+        result_ids = []
+        for i in range(len(alive)):
+            result_ids.append(alive[(start + i) % len(alive)].id)
+        return result_ids
+
     return [p.id for p in alive]
 
 
-def begin_speak_turn(game_id: str, speak_order_rule: str = "by_seat") -> str | None:
+def begin_speak_turn(
+    game_id: str,
+    speak_order_rule: str = "by_seat",
+    sheriff_id: str | None = None,
+    first_dead_player_id: str | None = None,
+    speak_direction: str | None = None,
+) -> str | None:
     game = _get_game_or_raise(game_id)
-    game.speak_order = _alive_speak_order(game, speak_order_rule)
+    game.speak_order = _alive_speak_order(
+        game, speak_order_rule,
+        sheriff_id=sheriff_id,
+        first_dead_player_id=first_dead_player_id,
+        speak_direction=speak_direction,
+    )
     game.current_speaker_id = game.speak_order[0] if game.speak_order else None
     game.speak_turn_submitted = False
     return game.current_speaker_id
@@ -747,8 +855,15 @@ def record_night_action(game_id: str, player_id: str, target_id: str, action_typ
         if not skill.can_target_self and not (skill.can_target_self_first_night and is_first_night):
             raise AppError("不能对自己执行夜间行动", status_code=409)
 
-    if not SKILL_REGISTRY[player.role].consecutive_target_allowed and player.last_guard_target_id == target_id:
-        raise AppError(f"{SKILL_REGISTRY[player.role].name}不能连续两晚选择同一目标", status_code=409)
+    # 通用连续目标检查：根据角色类型获取对应的 last_target_id
+    if not SKILL_REGISTRY[player.role].consecutive_target_allowed:
+        last_target_id: str | None = None
+        if player.role == RoleType.prophet:
+            last_target_id = player.last_prophet_target_id
+        elif player.role == RoleType.guard:
+            last_target_id = player.last_guard_target_id
+        if last_target_id and target_id == last_target_id:
+            raise AppError(f"{SKILL_REGISTRY[player.role].name}不能连续两晚选择同一目标", status_code=409)
 
     # 女巫特殊校验：药剂各只能用一次；解药只能救刀口
     if player.role == RoleType.witch:
@@ -971,6 +1086,22 @@ def resolve_night(game_id: str) -> dict[str, object]:
             if guard_player:
                 guard_player.last_guard_target_id = guarded_target_id
 
+    # 记录预言家 last_prophet_target_id
+    for action in game.night_actions:
+        if action.get("role") == RoleType.prophet.value:
+            prophet_target_id = str(action.get("targetId", ""))
+            prophet_player = next((p for p in game.players if p.id == str(action.get("playerId", ""))), None)
+            if prophet_player:
+                prophet_player.last_prophet_target_id = prophet_target_id
+
+    # 记录昨夜死亡玩家ID（用于发言顺序）
+    if all_killed_ids:
+        # 多死时随机选择一个死者作为发言起点参考
+        killed_list = list(all_killed_ids)
+        game.first_dead_player_id = random.choice(killed_list)
+    else:
+        game.first_dead_player_id = None
+
     # --- Reset night_action_done for all players ---
     for player in game.players:
         player.night_action_done = False
@@ -1075,6 +1206,7 @@ def resolve_vote_round(game_id: str, vote_tie_rule: str = "no_elimination") -> d
         # 白痴翻牌免疫：被投票放逐时不死亡，但之后不能投票
         if eliminated_player.role == RoleType.idiot and not eliminated_player.vote_immunity_used:
             eliminated_player.vote_immunity_used = True
+            eliminated_player.is_idiot_revealed = True  # 白痴翻牌，公开可见
             idiot_immunity = True
             # 白痴免疫，不算淘汰，但仍记录谁被投
         else:

@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <!-- 狼人角色图标：狼头轮廓 -->
+  <path d="M12 20L8 6l10 8 6-4 8-2 8 2 6 4 10-8-4 14 2 4-2 10-6 8-8 6h-12l-8-6-6-8-2-10 2-4z" fill="currentColor"/>
+  <!-- 眼睛 -->
+  <circle cx="24" cy="26" r="3" fill="#1a1a2e"/>
+  <circle cx="40" cy="26" r="3" fill="#1a1a2e"/>
+  <!-- 鼻子 -->
+  <path d="M30 34l2 3 2-3" stroke="#1a1a2e" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- 嘴巴/獠牙 -->
+  <path d="M26 38l2-2 4 2 4-2 2 2" stroke="#1a1a2e" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+</svg>

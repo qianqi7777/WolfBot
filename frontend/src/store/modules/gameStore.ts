@@ -23,6 +23,7 @@ import type {
   SheriffTransferPayload,
   WolfSelfDestructPayload,
   GameMode,
+  SpeakDirectionRequestPayload,
 } from '@/types/game';
 
 export interface GameState {
@@ -67,6 +68,8 @@ export interface GameState {
   // 女巫刀口信息
   wolfKillTargetId: string | null;
   wolfKillTargetLabel: string | null;
+  // 发言方向选择
+  speakDirectionRequest: SpeakDirectionRequestPayload | null;
 }
 
 const SESSION_GAME_ID_KEY = 'wolfbot.gameId';
@@ -191,6 +194,7 @@ export const useGameStore = defineStore('game', {
     wolfSelfDestructed: null,
     wolfKillTargetId: null,
     wolfKillTargetLabel: null,
+    speakDirectionRequest: null,
   }),
   getters: {
     alivePlayers: (state) => state.players.filter((player) => player.isAlive),
@@ -248,6 +252,7 @@ export const useGameStore = defineStore('game', {
         this.wolfSelfDestructed = null;
         this.wolfKillTargetId = null;
         this.wolfKillTargetLabel = null;
+        this.speakDirectionRequest = null;
         this.deadline = null;
       }
       saveSession(this.gameId, this.myId);
@@ -381,6 +386,9 @@ export const useGameStore = defineStore('game', {
       this.wolfKillTargetId = targetId;
       this.wolfKillTargetLabel = label;
     },
+    setSpeakDirectionRequest(payload: SpeakDirectionRequestPayload | null) {
+      this.speakDirectionRequest = payload;
+    },
     addAnnounce(content: string) {
       this.announceList.push({
         id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
@@ -446,6 +454,7 @@ export const useGameStore = defineStore('game', {
       this.sheriffElectResult = null;
       this.sheriffTransfer = null;
       this.wolfSelfDestructed = null;
+      this.speakDirectionRequest = null;
       clearSession();
     },
   },

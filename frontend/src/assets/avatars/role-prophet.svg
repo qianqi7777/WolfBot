@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <!-- 预言家角色图标：水晶球 -->
+  <ellipse cx="32" cy="50" rx="12" ry="4" fill="currentColor" opacity="0.3"/>
+  <circle cx="32" cy="30" r="18" fill="currentColor"/>
+  <circle cx="32" cy="30" r="14" fill="currentColor" opacity="0.6"/>
+  <!-- 高光 -->
+  <circle cx="26" cy="24" r="4" fill="white" opacity="0.5"/>
+  <circle cx="30" cy="22" r="2" fill="white" opacity="0.3"/>
+  <!-- 底座 -->
+  <path d="M24 46h16l2 4H22l2-4z" fill="currentColor"/>
+  <rect x="26" y="48" width="12" height="3" rx="1" fill="currentColor"/>
+</svg>

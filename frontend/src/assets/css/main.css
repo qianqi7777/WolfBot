@@ -1,3 +1,6 @@
+@import '../../styles/theme-light.css';
+@import '../../styles/theme-dark.css';
+
 :root {
   color-scheme: light;
   font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
@@ -5,8 +8,9 @@
 
 body {
   margin: 0;
-  background: #f5f7fb;
-  color: #1f2937;
+  background: var(--bg-primary, #f5f7fb);
+  color: var(--text-primary, #1f2937);
+  transition: background 0.5s ease, color 0.5s ease;
 }
 
 .app-shell {
@@ -29,6 +33,6 @@ body {
 .round-label {
   display: inline-block;
   margin-left: 8px;
-  color: #6b7280;
+  color: var(--text-secondary, #6b7280);
   font-size: 12px;
 }

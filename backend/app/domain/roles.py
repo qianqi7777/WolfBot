@@ -74,6 +74,7 @@ class ScenePreset:
     role_distribution: dict[RoleType, int]  # 角色分配：{RoleType: 数量}
     is_dark: bool = True                 # 是否暗牌
     has_sheriff: bool = False            # 是否有警长
+    active_roles: list[RoleType] = field(default_factory=list)  # 该板子中激活的角色行动模块（夜间行动顺序）
     rules: dict[str, Any] = field(default_factory=dict)  # 场景规则（覆盖 DEFAULT_RULES）
 
     @property
@@ -83,6 +84,20 @@ class ScenePreset:
     def get_rule(self, key: str) -> Any:
         """获取规则值，优先读自身 rules，回退到 DEFAULT_RULES"""
         return self.rules.get(key, DEFAULT_RULES.get(key))
+
+    def __post_init__(self):
+        # 如果没有指定 active_roles，自动从 role_distribution 推导
+        if not self.active_roles:
+            # 按标准夜间行动顺序排列
+            from app.domain.enums import RoleType
+            standard_order = [
+                RoleType.wolf,
+                RoleType.witch,
+                RoleType.prophet,
+                RoleType.guard,
+            ]
+            active = [r for r in standard_order if r in self.role_distribution]
+            object.__setattr__(self, 'active_roles', active)
 
 
 # ------------------------------------------------------------------
@@ -95,7 +110,7 @@ WOLF_SKILL = RoleSkill(
     faction="wolf",
     has_night_action=True,
     night_action_type="kill",
-    ai_hint="你是狼人阵营。你的目标是伪装成好人，引导投票方向，夜间与同伴协商击杀目标。在极端劣势时可以考虑自爆（白天发言/投票/竞选阶段），打断好人节奏。竞选阶段双爆可吞警徽。",
+    ai_hint="你是狼人阵营。你的目标是伪装成好人，引导投票方向，夜间与同伴协商击杀目标。在极端劣势时可以考虑自爆（白天发言/投票/竞选阶段），打断好人节奏。竞选阶段双爆可吞警徽。注意观察哪些玩家是已翻牌的白痴（不能投票），以及当前警长是谁。",
     human_hint="你是狼人，请选择今晚要袭击的目标",
     mock_speeches=[
         "我觉得大家先冷静分析一下，不要急着站队。",
@@ -112,7 +127,7 @@ CIVILIAN_SKILL = RoleSkill(
     faction="civilian",
     has_night_action=False,
     night_action_type="",
-    ai_hint="你是平民（好人阵营）。你没有特殊技能，但可以通过发言和投票找出狼人。",
+    ai_hint="你是平民（好人阵营）。你没有特殊技能，但可以通过发言和投票找出狼人。注意观察哪些玩家是已翻牌的白痴（不能投票），以及当前警长是谁。",
     human_hint="",
     mock_speeches=[
         "我是好人，目前还在整理线索，先听听大家的分析。",
@@ -128,14 +143,15 @@ PROPHET_SKILL = RoleSkill(
     faction="civilian",
     has_night_action=True,
     night_action_type="check",
-    ai_hint="你是预言家（好人阵营）。你每晚可以查验一名玩家的身份，发言时要谨慎，避免过早暴露自己，同时传递查验信息。",
-    human_hint="你是预言家，请选择今晚要查验的目标",
+    ai_hint="你是预言家（好人阵营）。你每晚可以查验一名玩家的身份，发言时要谨慎，避免过早暴露自己，同时传递查验信息。注意：你不能连续两晚查验同一人。注意观察哪些玩家是已翻牌的白痴（不能投票），以及当前警长是谁。",
+    human_hint="你是预言家，请选择今晚要查验的目标（不能连续两晚查验同一人）",
     mock_speeches=[
         "我手上有一些信息，但现在不是公开的时候。",
         "我觉得大家的发言可以再深入一点。",
         "我注意到有些发言不太自然，后续我会详细分析。",
         "我需要再观察一轮，目前还不方便给出判断。",
     ],
+    consecutive_target_allowed=False,   # 预言家不能连续两晚查验同一人
 )
 
 GUARD_SKILL = RoleSkill(
@@ -144,14 +160,15 @@ GUARD_SKILL = RoleSkill(
     faction="civilian",
     has_night_action=True,
     night_action_type="guard",
-    ai_hint="你是守卫（好人阵营）。你每晚可以守护一名玩家免受狼人袭击，发言时不要暴露身份，注意保护关键神职。",
-    human_hint="你是守卫，请选择今晚要守护的目标（不能连续守同一人）",
+    ai_hint="你是守卫（好人阵营）。你每晚可以守护一名玩家（包括自己）免受狼人袭击，但不能连续两晚守护同一人。发言时不要暴露身份，注意保护关键神职。注意观察哪些玩家是已翻牌的白痴（不能投票），以及当前警长是谁。",
+    human_hint="你是守卫，请选择今晚要守护的目标（可以守自己，但不能连续守同一人）",
     mock_speeches=[
         "我觉得大家不要急于暴露信息，先整理一下思路。",
         "我目前还在观察，有些人的表现值得关注。",
         "我暂时没有特别的判断，先听听大家的意见。",
         "我建议大家注意一下自己的发言方式，不要给狼人太多信息。",
     ],
+    can_target_self=True,               # 守卫可以守自己
     consecutive_target_allowed=False,   # 守卫不能连续两晚守同一人
 )
 
@@ -165,7 +182,7 @@ HUNTER_SKILL = RoleSkill(
     faction="civilian",
     has_night_action=False,
     night_action_type="",
-    ai_hint="你是猎人（好人阵营）。你被投票出局或被狼人杀害时可以开枪带走一人，注意不要误伤好人。注意：被女巫毒杀时无法开枪。首夜法官会告知你开枪状态。",
+    ai_hint="你是猎人（好人阵营）。你被投票出局或被狼人杀害时可以开枪带走一人，注意不要误伤好人。注意：被女巫毒杀时无法开枪。首夜法官会告知你开枪状态。如果你是最后存活的灵牌(神职)，出局时不能开枪，否则会直接触发屠边导致狼人获胜。注意：被女巫毒杀时不能开枪。注意观察哪些玩家是已翻牌的白痴（不能投票），以及当前警长是谁。",
     human_hint="你是猎人，被投票放逐或被狼人杀害时可以开枪带走一人（被毒杀时不能开枪）",
     mock_speeches=[
         "我觉得大家不要太冲动，让我先把情况理清楚。",
@@ -182,7 +199,7 @@ WITCH_SKILL = RoleSkill(
     faction="civilian",
     has_night_action=True,
     night_action_type="witch",
-    ai_hint="你是女巫（好人阵营）。你有一瓶解药和一瓶毒药，各只能使用一次，每晚只能使用一瓶。首夜可以自救，之后不能自救。谨慎使用毒药，避免毒到好人。",
+    ai_hint="你是女巫（好人阵营）。你有一瓶解药和一瓶毒药，各只能使用一次，每晚只能使用一瓶。首夜可以自救，之后不能自救。谨慎使用毒药，避免毒到好人。注意观察哪些玩家是已翻牌的白痴（不能投票），以及当前警长是谁。",
     human_hint="你是女巫，是否使用解药救人或毒药杀人（首夜可自救，之后不可自救）",
     mock_speeches=[
         "我手上有些信息需要确认，先不急着表态。",
@@ -200,7 +217,7 @@ IDIOT_SKILL = RoleSkill(
     faction="civilian",
     has_night_action=False,
     night_action_type="",
-    ai_hint="你是白痴（好人阵营）。你被投票放逐时可以翻牌免疫出局，但之后不能投票。注意：被狼人杀害或被女巫毒杀时无法免疫。",
+    ai_hint="你是白痴（好人阵营）。你被投票放逐时可以翻牌免疫出局，但之后不能投票。注意：被狼人杀害或被女巫毒杀时无法免疫。注意观察哪些玩家是已翻牌的白痴（不能投票），以及当前警长是谁。",
     human_hint="你是白痴，被投票放逐时可翻牌免疫出局",
     mock_speeches=[
         "我觉得大家应该冷静思考，别被带偏了。",
@@ -352,6 +369,12 @@ SCENE_PRESETS: dict[str, ScenePreset] = {
         },
         is_dark=True,
         has_sheriff=True,
+        # 预女猎白：夜间行动顺序为狼人→女巫→预言家（无守卫）
+        active_roles=[
+            RoleType.wolf,
+            RoleType.witch,
+            RoleType.prophet,
+        ],
         rules={
             "win_condition": "slaughter_edge",
             "speak_order": "by_seat",

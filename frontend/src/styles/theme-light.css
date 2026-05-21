@@ -1,0 +1,20 @@
+/* 浅色主题 CSS 变量定义 */
+:root,
+[data-theme="light"] {
+  --bg-primary: #f5f7fb;
+  --bg-card: #ffffff;
+  --bg-card-glass: rgba(255, 255, 255, 0.9);
+  --bg-bubble-self: #409eff;
+  --bg-bubble-other: #f0f2f5;
+  --bg-bubble-ai: #e8d5f5;
+  --text-primary: #1f2937;
+  --text-secondary: #6b7280;
+  --text-bubble-self: #ffffff;
+  --text-bubble-other: #1f2937;
+  --accent-color: #409eff;
+  --border-color: #e4e7ed;
+  --speaker-glow: rgba(64, 158, 255, 0.6);
+  --table-bg: transparent;
+  --faction-wolf: #ef4444;
+  --faction-civilian: #22c55e;
+}

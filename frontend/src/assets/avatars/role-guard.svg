@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <!-- 守卫角色图标：盾牌 -->
+  <path d="M32 6L8 18v16c0 12 10.5 20 24 24 13.5-4 24-12 24-24V18L32 6z" fill="currentColor"/>
+  <path d="M32 12L14 21v13c0 9.6 8.4 16 18 19.2 9.6-3.2 18-9.6 18-19.2V21L32 12z" fill="currentColor" opacity="0.4"/>
+  <!-- 盾牌中心十字 -->
+  <rect x="30" y="22" width="4" height="16" rx="1" fill="white" opacity="0.5"/>
+  <rect x="24" y="28" width="16" height="4" rx="1" fill="white" opacity="0.5"/>
+</svg>

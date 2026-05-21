@@ -1,12 +1,12 @@
 <template>
-  <el-card shadow="never">
+  <el-card shadow="never" class="vote-panel">
     <template #header>投票面板</template>
     <el-radio-group v-model="selected">
       <el-radio-button v-for="player in votablePlayers" :key="player.id" :value="player.id">
         {{ player.seatNumber }}号({{ player.name }})
       </el-radio-button>
     </el-radio-group>
-    <div class="actions">
+    <div class="vote-actions">
       <el-button type="danger" :disabled="disabled || !selected || selected === 'abstain'" @click="handleVote">投票</el-button>
       <el-button type="info" :disabled="disabled" @click="handleAbstain">弃票</el-button>
     </div>
@@ -46,3 +46,15 @@ const handleAbstain = () => {
   selected.value = '';
 };
 </script>
+
+<style scoped>
+.vote-panel {
+  transition: background 0.5s ease, border-color 0.5s ease;
+}
+.vote-actions {
+  margin-top: 12px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+</style>

@@ -1,14 +1,28 @@
 classDiagram
     direction LR
 
-    class GameStatus {
-        <<enumeration>>
-        waiting
-        night
-        day
-        speak
-        vote
-        end
+    class Player {
+        +string id
+        +string name
+        +number seatNumber
+        +RoleType role
+        +boolean isAI
+        +boolean isAlive
+        +boolean isSheriff
+        +string avatarUrl
+        +string lastGuardTargetId
+        +boolean antidoteUsed
+        +boolean poisonUsed
+        +boolean isSpectator
+    }
+
+    class ChatMessage {
+        +string id
+        +string playerId
+        +string playerName
+        +string content
+        +string time
+        +boolean isAI
     }
 
     class RoleType {
@@ -16,118 +30,78 @@ classDiagram
         wolf
         civilian
         prophet
+        guard
+        hunter
+        witch
+        idiot
         unknown
     }
 
-    class MessageType {
-        <<enumeration>>
-        room_update
-        announce
-        ai_speak
-        player_speak
-        vote_result
-        game_status
-        role_info
-        player_update
-        game_over
-        night_action
-        night_result
-        error
+    class PlayerSeat {
+        <<Vue Component>>
+        +Player player
+        +boolean isSpeaking
+        +boolean isSelf
+        +number seatIndex
+        +number totalSeats
     }
 
-    class Player {
-        +str id
-        +str name
+    class CircleTable {
+        <<Vue Component>>
+        +Player[] players
+        +string currentSpeakerId
+        +string myId
+        +calculateSeatPositions() SeatPosition[]
+    }
+
+    class ChatBubble {
+        <<Vue Component>>
+        +ChatMessage message
+        +string myId
+        +Player player
+    }
+
+    class ChatBox {
+        <<Vue Component>>
+        +ChatMessage[] messages
+        +boolean disabled
+        +string myId
+        +Player[] players
+        +submit(content) void
+    }
+
+    class RoleIcon {
+        <<Vue Component>>
         +RoleType role
-        +bool is_ai
-        +bool is_alive
-        +bool night_action_done
+        +number size
     }
 
-    class GameState {
-        +str game_id
-        +list~Player~ players
-        +GameStatus game_status
-        +int current_round
-        +bool started
-        +str|None winner_faction
-        +list~dict~ chats
-        +list~dict~ votes
-        +list~dict~ night_actions
-        +list~str~ announcements
-        +str owner_player_id
-        +str created_at
-        +bool ai_cycle_running
+    class RoleCard {
+        <<Vue Component>>
+        +RoleType role
     }
 
-    class GameSnapshot {
-        +str game_id
-        +str player_id
-        +GameStatus game_status
-        +int current_round
-        +bool started
-        +str|None winner_faction
-        +list~Player~ players
-        +RoleType my_role
-        +bool night_action_required
+    class GamePlay {
+        <<Vue View>>
+        +GameState store
+        +boolean isNight
+        +applyTheme() void
     }
 
-    class NightActionRequest {
-        +str player_id
-        +str target_id
+    class AvatarUtil {
+        <<Utility>>
+        +getPlayerAvatar(Player) string
+        +getDefaultAvatar(boolean) string
     }
 
-    class SpeakRequest {
-        +str content
-        +str player_id
-    }
-
-    class VoteRequest {
-        +str target_id
-        +str player_id
-    }
-
-    class GameService {
-        +create_game(player_name) GameSnapshot
-        +join_game(game_id, player_name) GameSnapshot
-        +get_game(game_id, requester_id) GameSnapshot
-        +start_game(game_id) GameSnapshot
-        +record_speak(game_id, player_id, content) void
-        +record_vote(game_id, voter_id, target_id) void
-        +record_night_action(game_id, player_id, target_id) void
-        +get_night_targets(game_id, player_id) list~Player~
-        +resolve_night(game_id) dict
-        +resolve_vote_round(game_id) dict
-        +_assign_roles(players) void
-        +_snapshot(game, player_id, my_role) GameSnapshot
-    }
-
-    class AiService {
-        +launch_ai_cycle(game_id) void
-        +run_ai_cycle(game_id) None
-        -_generate_ai_speech(game_id, player_id) str
-        -_generate_ai_vote(game_id, player_id) str
-        -_generate_ai_night_action(game_id, player_id) str
-        -_call_openai_compatible(messages) str|None
-    }
-
-    class VoteService {
-        +submit_vote(game_id, voter_id, target_id) void
-    }
-
-    class RoomService {
-        +create_room(player_name) GameSnapshot
-        +join_room(game_id, player_name) GameSnapshot
-        +get_room(game_id, requester_id) GameSnapshot
-        +start_room(game_id) GameSnapshot
-    }
-
-    GameService --> GameState : manages
-    GameService --> GameSnapshot : produces
-    GameService --> Player : manages
-    AiService --> GameService : uses
-    VoteService --> GameService : uses
-    RoomService --> GameService : delegates
-    GameState *-- Player : contains
-    GameSnapshot --> Player : references
-    NightActionRequest --> Player : targets
+    Player --> RoleType : role
+    PlayerSeat --> Player : player
+    CircleTable --> PlayerSeat : contains N
+    ChatBox --> ChatBubble : contains N
+    ChatBubble --> Player : player
+    ChatBubble --> AvatarUtil : uses
+    PlayerSeat --> AvatarUtil : uses
+    RoleCard --> RoleIcon : uses
+    GamePlay --> CircleTable : contains
+    GamePlay --> ChatBox : contains
+    GamePlay --> RoleCard : contains

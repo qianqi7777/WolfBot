@@ -94,7 +94,7 @@
       <!-- 女巫：看到刀口，选择是否救 + 选毒杀目标 -->
       <template v-else-if="role === 'witch'">
         <!-- 解药：显示刀口，选择救/不救 -->
-        <div v-if="!antidoteUsed" class="witch-save-section">
+        <div v-if="!antidoteUsed && !saveSubmitted" class="witch-save-section">
           <el-alert
             :title="wolfKillInfo"
             type="warning"
@@ -113,12 +113,21 @@
               </el-radio-button>
             </el-radio-group>
           </div>
+          <el-button
+            v-if="potionType"
+            type="warning"
+            :disabled="disabled"
+            style="margin-top: 12px"
+            @click="handleSaveSubmit"
+          >
+            {{ potionType === 'save' ? '确认使用解药' : '确认跳过' }}
+          </el-button>
         </div>
-        <div v-else class="witch-save-section">
+        <div v-else-if="antidoteUsed || saveSubmitted" class="witch-save-section">
           <el-alert title="解药已使用" type="info" show-icon :closable="false" class="used-alert" />
         </div>
         <!-- 毒药：选择毒杀目标 -->
-        <div v-if="!poisonUsed" class="witch-poison-section">
+        <div v-if="!poisonUsed && !poisonSubmitted" class="witch-poison-section">
           <el-divider />
           <p>毒药：选择要毒杀的玩家</p>
           <el-radio-group v-model="selectedTarget" :disabled="disabled">
@@ -131,7 +140,6 @@
             </el-radio>
           </el-radio-group>
           <el-button
-            v-if="!poisonSubmitted"
             type="danger"
             :disabled="disabled || !selectedTarget"
             style="margin-top: 8px"
@@ -140,22 +148,17 @@
           >
             确认毒杀
           </el-button>
-          <el-tag v-else type="danger" size="small" style="margin-top: 8px">毒杀已提交</el-tag>
         </div>
-        <div v-else class="witch-poison-section">
+        <div v-else-if="poisonUsed || poisonSubmitted" class="witch-poison-section">
           <el-alert title="毒药已使用" type="info" show-icon :closable="false" class="used-alert" />
         </div>
-        <!-- 确认解药/跳过 -->
-        <el-button
-          v-if="potionType && potionType !== 'poison' && !saveSubmitted"
-          type="warning"
-          :disabled="disabled"
-          style="margin-top: 12px"
-          @click="handleSaveSubmit"
-        >
-          {{ potionType === 'save' ? '确认使用解药' : '确认跳过' }}
-        </el-button>
-        <el-tag v-if="saveSubmitted" type="success" size="small" style="margin-top: 12px">解药操作已提交</el-tag>
+        <!-- 女巫用药情况汇总（只给女巫自己看） -->
+        <WitchPotionStatus
+          :antidote-used="antidoteUsed || saveSubmitted"
+          :poison-used="poisonUsed || poisonSubmitted"
+          :save-target="saveSubmitted ? wolfKillLabel : null"
+          :poison-target="poisonSubmitted ? poisonTargetLabel : null"
+        />
       </template>
 
       <!-- 无夜间行动的角色（平民、猎人、白痴等）：等待 -->
@@ -171,6 +174,7 @@ import { computed, ref } from 'vue';
 
 import type { Player, RoleType, WolfTargetUpdate } from '@/types/game';
 import { ROLE_LABELS } from '@/utils/constants';
+import WitchPotionStatus from './WitchPotionStatus.vue';
 
 const props = defineProps<{
   role: RoleType;
@@ -246,6 +250,13 @@ const handlePoisonSubmit = () => {
   }
 };
 
+/** 毒药目标标签 */
+const poisonTargetLabel = computed(() => {
+  if (!selectedTarget.value) return null;
+  const target = props.players.find((p) => p.id === selectedTarget.value);
+  return target ? `${target.seatNumber}号(${target.name})` : null;
+});
+
 /** 查验结果显示（暂从 announce 获取） */
 const checkResult = computed(() => {
   // TODO: Phase 2 从私发 announce 解析查验结果
@@ -261,7 +272,7 @@ const guardResult = computed(() => {
 
 <style scoped>
 .night-action {
-  margin-bottom: 16px;
+  margin-bottom: 0;
 }
 .teammate-hint {
   color: #e6a23c;
@@ -277,9 +288,9 @@ const guardResult = computed(() => {
   gap: 8px;
   margin-bottom: 8px;
   padding: 8px;
-  background: #fdf6ec;
+  background: var(--bg-card-glass, rgba(253, 246, 236, 0.6));
   border-radius: 4px;
-  border: 1px solid #faecd8;
+  border: 1px solid var(--border-color);
 }
 .wolf-target-item {
   display: flex;
@@ -297,12 +308,15 @@ const guardResult = computed(() => {
   margin-right: 8px;
 }
 .hint-text {
-  color: #909399;
+  color: var(--text-secondary, #909399);
   font-size: 13px;
   margin: 8px 0;
 }
 .used-label {
-  color: #c0c4cc;
+  color: var(--text-secondary, #c0c4cc);
   font-size: 12px;
+}
+.used-alert {
+  margin-bottom: 8px;
 }
 </style>

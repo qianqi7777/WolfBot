@@ -49,4 +49,6 @@ class MessageType(str, Enum):
     sheriff_elect_result = "sheriff_elect_result" # 警长竞选结果
     sheriff_transfer = "sheriff_transfer"         # 警长转让徽章
     wolf_self_destruct = "wolf_self_destruct"     # 狼人自爆
+    speak_direction_request = "speak_direction_request"  # 警长选择发言方向请求
+    speak_direction = "speak_direction"           # 发言方向选择结果
     error = "error"                       # 错误消息

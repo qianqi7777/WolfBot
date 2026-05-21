@@ -1,9 +1,8 @@
 <template>
-  <el-card shadow="never">
-    <template #header>当前阶段</template>
+  <div class="game-status-bar">
     <strong>{{ label }}</strong>
     <span v-if="round > 0" class="round-label">第 {{ round }} 轮</span>
-  </el-card>
+  </div>
 </template>
 
 <script setup lang="ts">
@@ -17,3 +16,17 @@ const props = defineProps<{ status: GameStatus; round?: number }>();
 const label = computed(() => GAME_STATUS_LABELS[props.status]);
 const round = computed(() => props.round ?? 1);
 </script>
+
+<style scoped>
+.game-status-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: var(--text-primary);
+}
+.round-label {
+  color: var(--text-secondary, #6b7280);
+  font-size: 12px;
+}
+</style>

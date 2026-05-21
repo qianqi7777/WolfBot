@@ -1,0 +1,92 @@
+sequenceDiagram
+    participant Judge
+    participant GameService
+    participant GameState
+    participant AI as AI Service
+    participant WS as WebSocket
+    participant FE as Frontend
+
+    Note over Judge,FE: === Bug #1: 猎人最后神职不能开枪 ===
+    
+    Judge->>GameService: resolve_night / resolve_vote_round
+    Note over GameService: 猎人死亡，设置 pending_hunter_shoot
+    GameService->>GameState: pending_hunter_shoot = hunter_id
+
+    Judge->>Judge: _handle_hunter_shoot()
+    Judge->>Judge: _check_hunter_last_god()
+    Note over Judge: 检查：除猎人外，存活神职是否为0
+    
+    alt 猎人是最后神职
+        Judge->>GameState: pending_hunter_shoot = None
+        Judge->>FE: 公告"猎人作为最后神职不能开枪"
+    else 猎人不是最后神职
+        Judge->>Judge: 正常开枪流程
+    end
+
+    Note over Judge,FE: === Bug #2: 预言家不能连续验同一人 ===
+    
+    FE->>WS: night_action {targetId}
+    WS->>GameService: record_night_action()
+    GameService->>GameService: 检查 consecutive_target_allowed
+    GameService->>GameService: 比对 player.last_prophet_target_id
+    
+    alt 连续验同一人
+        GameService-->>WS: 400 "预言家不能连续两晚查验同一目标"
+    else 正常
+        GameService->>GameState: 记录夜间行动
+    end
+
+    GameService->>GameService: resolve_night()
+    GameService->>GameState: 更新 player.last_prophet_target_id
+
+    Note over Judge,FE: === Bug #3: 白天发言顺序 ===
+    
+    Judge->>Judge: speak_phase()
+    Judge->>Judge: 检查是否有警长
+
+    alt 有警长(真人)
+        Judge->>FE: broadcast speak_direction_request
+        FE->>WS: speak_direction {direction: "left"/"right"}
+        WS->>GameState: speak_direction = direction
+    else 有警长(AI)
+        Judge->>GameState: speak_direction = random("left"/"right")
+    else 无警长
+        Judge->>Judge: first_dead_player_id 决定起点
+    end
+
+    Judge->>GameService: _alive_speak_order(sheriff_id, direction, first_dead)
+    GameService-->>Judge: speak_order 列表
+    Judge->>Judge: 按顺序发言
+
+    Note over Judge,FE: === Bug #5: 竞选发言退水 ===
+    
+    loop 每个候选人发言
+        Judge->>FE: broadcast sheriff_speech_turn {canWithdraw: true}
+        alt 候选人选择退水
+            FE->>WS: sheriff_campaign {action: "withdraw"}
+            WS->>GameService: withdraw_sheriff_campaign()
+            GameService->>GameState: 从 candidate_ids 移除
+            GameService-->>FE: broadcast 退水通知
+        else 正常发言
+            FE->>WS: speak {content: ...}
+        end
+    end
+
+    Note over Judge,FE: === Bug #7: AI投票信息增强 ===
+    
+    Judge->>AI: _generate_ai_vote()
+    AI->>GameState: 获取 game.chats(发言摘要) + game.votes(投票状态)
+    AI->>AI: 构建 prompt 包含发言摘要+投票状态+白痴翻牌+警长信息
+    AI-->>Judge: 投票目标
+
+    Note over Judge,FE: === Bug #9: 猎人开枪胜负检查 ===
+    
+    FE->>WS: hunter_shoot {targetId}
+    WS->>GameState: target.is_alive = False
+    WS->>GameService: _check_win_condition()
+    
+    alt 游戏结束
+        WS->>FE: broadcast game_over
+    else 游戏继续
+        WS->>GameState: 检查被枪杀者是否警长
+    end

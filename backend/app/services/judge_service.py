@@ -155,7 +155,7 @@ class Judge:
         # AI 死亡玩家自动发表遗言
         player = next((p for p in game.players if p.id == player_id), None)
         if player and player.is_ai:
-            speech = await _generate_ai_speech(self.game_id, player.id)
+            speech = await _generate_ai_speech(self.game_id, player.id, speech_type="last_words")
             record_last_words(self.game_id, player.id, speech)
             await self._broadcast(MessageType.ai_speak, {
                 "content": speech,
@@ -185,12 +185,41 @@ class Judge:
     #  猎人开枪处理
     # ------------------------------------------------------------------
 
+    def _check_hunter_last_god(self) -> bool:
+        """检查猎人是否是最后存活的神职（灵牌）。
+        如果猎人是最后一个神职，开枪会直接触发屠边导致狼人获胜，因此不能开枪。
+        返回 True 表示猎人是最后神职（不能开枪），False 表示不是（可以开枪）。"""
+        game = self._game()
+        hunter_id = game.pending_hunter_shoot
+        if not hunter_id:
+            return False
+
+        # 神职角色列表
+        god_roles = {RoleType.prophet, RoleType.witch, RoleType.hunter, RoleType.guard, RoleType.idiot}
+
+        # 获取所有存活的神职（排除猎人自己，因为猎人已死亡/即将出局）
+        alive_gods = [
+            p for p in game.players
+            if p.is_alive and p.role in god_roles and p.id != hunter_id
+        ]
+
+        # 如果除猎人外没有存活神职 → 猎人是最后神职
+        return len(alive_gods) == 0
+
     async def _handle_hunter_shoot(self) -> bool:
         """处理猎人开枪。猎人死亡后可以选择开枪带走一人。
         返回 True 继续，False 结束游戏。"""
         game = self._game()
         hunter_id = game.pending_hunter_shoot
         if not hunter_id:
+            return True
+
+        # 检查猎人是否是最后神职
+        if self._check_hunter_last_god():
+            hunter = next((p for p in game.players if p.id == hunter_id), None)
+            hunter_name = f"{hunter.seat_number}号({hunter.name})" if hunter else "猎人"
+            await self._announce(f"猎人是最后存活的灵牌(神职)，不能开枪，否则会直接触发屠边导致狼人获胜")
+            game.pending_hunter_shoot = None
             return True
 
         logger.info("[Judge] game=%s 猎人 %s 触发开枪", self.game_id, hunter_id)
@@ -214,10 +243,26 @@ class Judge:
         if hunter.is_ai:
             # AI 猎人自动选择目标
             import random as _random
-            # 策略：优先射杀狼人，但不能100%确定
-            suspected_wolves = [p for p in targets if SKILL_REGISTRY[p.role].faction == "wolf"]
-            if suspected_wolves and _random.random() < 0.6:
-                target = _random.choice(suspected_wolves)
+            # 策略1：优先射杀发言中被多人怀疑的玩家（从聊天推断）
+            suspected_targets = self._ai_hunter_pick_target(game, hunter, targets)
+            if suspected_targets and _random.random() < 0.6:
+                target = suspected_targets
+            # 策略2：从投票中找得票最多的玩家
+            elif game.votes and _random.random() < 0.4:
+                vote_tally: dict[str, int] = {}
+                for v in game.votes:
+                    tid = str(v.get("targetId", ""))
+                    if tid and tid != "abstain":
+                        vote_tally[tid] = vote_tally.get(tid, 0) + 1
+                if vote_tally:
+                    most_voted_id = max(vote_tally, key=vote_tally.get)
+                    most_voted = next((p for p in targets if p.id == most_voted_id), None)
+                    if most_voted:
+                        target = most_voted
+                    else:
+                        target = _random.choice(targets)
+                else:
+                    target = _random.choice(targets)
             else:
                 target = _random.choice(targets)
 
@@ -430,10 +475,12 @@ class Judge:
         await self._announce("天黑请闭眼")
         await asyncio.sleep(1.5)
 
-        # 按注册表顺序依次询问各角色
-        for role_type in get_night_action_roles():
-            logger.info("[Judge] game=%s 询问 %s 行动", self.game_id, get_skill(role_type).name)
-            await self._ask_role(game, role_type)
+        # 按板子配置的 active_roles 顺序依次询问各角色
+        from app.roles import get_active_role_actions
+        active_actions = get_active_role_actions(game.room_settings.scene.preset)
+        for action_class in active_actions:
+            logger.info("[Judge] game=%s 询问 %s 行动", self.game_id, action_class.role_type.value)
+            await action_class.night_action(self, game)
             await asyncio.sleep(0.5)
 
         # 首夜额外环节：白痴确认身份 + 猎人确认开枪状态
@@ -775,14 +822,11 @@ class Judge:
             clear_sheriff_election(self.game_id)
             return True
 
-        # ── 阶段2：竞选发言（候选人按座位顺序发言） ──
+        # ── 阶段2：竞选发言（候选人按上警顺序逆序发言） ──
         await self._announce(f"{'、'.join(self._candidate_labels(game))} 上警，开始竞选发言")
         # 竞选发言顺序：从最后一个上警的玩家开始逆序发言（网易标准规则）
-        candidates_sorted = sorted(
-            candidates,
-            key=lambda cid: next((p.seat_number for p in game.players if p.id == cid), 0),
-            reverse=True,  # 逆序：从最后一个上警的玩家开始
-        )
+        # sheriff_candidate_ids 是按上警时间追加的列表，逆序即为"最后上警的先发言"
+        candidates_sorted = list(reversed(game.sheriff_candidate_ids))
 
         for turn_idx, candidate_id in enumerate(candidates_sorted):
             game = self._game()
@@ -814,6 +858,7 @@ class Judge:
                 "turnCount": len(game.sheriff_candidate_ids),
                 "deadline": deadline,
                 "totalSeconds": speak_timeout,
+                "canWithdraw": True,  # 竞选发言期间可以退水
             })
             await self._announce(f"轮到 {candidate.seat_number}号({candidate.name}) 竞选发言")
 
@@ -941,6 +986,7 @@ class Judge:
                     "turnCount": len(final_candidates),
                     "deadline": deadline,
                     "totalSeconds": speak_timeout,
+                    "canWithdraw": True,  # 竞选发言期间可以退水
                 })
                 await self._announce(f"第二轮：轮到 {candidate.seat_number}号({candidate.name}) 竞选发言")
 
@@ -1040,6 +1086,42 @@ class Judge:
                 labels.append(f"{p.seat_number}号({p.name})")
         return labels
 
+    def _ai_hunter_pick_target(self, game, hunter, candidates: list):
+        """AI 猎人选择开枪目标（Bug #15）。
+        从聊天中推断被多人怀疑的玩家，优先开枪带走。
+        返回最可疑的目标玩家，如果没有则返回 None。
+        """
+        import re
+        suspicious_seat_counts: dict[int, int] = {}
+
+        # 扫描近期发言，统计被怀疑的玩家
+        for chat in game.chats[-20:]:
+            content = str(chat.get("content", ""))
+            # 匹配模式：X号可疑 / 怀疑X号 / X是狼 / 投X号
+            patterns = [
+                r'(\d+)号.*可疑',
+                r'怀疑.*?(\d+)号',
+                r'(\d+)号.*是狼',
+                r'(\d+).*是狼',
+                r'投.*?(\d+)号',
+                r'(\d+)号.*有问题',
+            ]
+            for pattern in patterns:
+                matches = re.findall(pattern, content)
+                for seat_str in matches:
+                    seat_num = int(seat_str)
+                    # 不把猎人自己算进去
+                    if seat_num != hunter.seat_number:
+                        suspicious_seat_counts[seat_num] = suspicious_seat_counts.get(seat_num, 0) + 1
+
+        # 按被怀疑次数排序，返回最可疑的目标
+        for seat_num, _count in sorted(suspicious_seat_counts.items(), key=lambda x: -x[1]):
+            matched = next((p for p in candidates if p.seat_number == seat_num), None)
+            if matched:
+                return matched
+
+        return None
+
     def _ai_should_run_for_sheriff(self, player) -> bool:
         """AI 决定是否上警。神职和狼人更倾向上警。"""
         import random
@@ -1051,11 +1133,21 @@ class Judge:
         return random.random() < 0.15  # 平民/猎人/白痴15%概率上警
 
     async def _generate_ai_sheriff_speech(self, player) -> str:
-        """AI 生成竞选警长发言"""
-        import random
+        """AI 生成竞选警长发言。优先调用 AI API，失败时回退到模板。"""
         game = self._game()
         skill = get_skill(player.role)
 
+        # 尝试调用 AI API 生成竞选发言
+        try:
+            speech = await _generate_ai_speech(self.game_id, player.id, speech_type="campaign")
+            if speech and speech.strip():
+                logger.info("[Judge] game=%s AI竞选发言使用API生成", self.game_id)
+                return speech
+        except Exception as exc:
+            logger.warning("[Judge] game=%s AI竞选发言API失败，回退模板: %s", self.game_id, exc)
+
+        # 回退到模板
+        import random
         templates = [
             f"大家好，我是{player.seat_number}号，我觉得这局我应该当警长，请大家支持我。",
             f"各位好，{player.seat_number}号申请上警。我希望能带领好人阵营走向胜利。",
@@ -1197,6 +1289,54 @@ class Judge:
     # ------------------------------------------------------------------
     #  狼人自爆处理
     # ------------------------------------------------------------------
+
+    async def _ask_sheriff_direction(self) -> str:
+        """询问警长选择发言方向（left/right）。
+        - 真人警长：广播 speak_direction_request，等待15秒，超时默认"right"
+        - AI 警长：随机选择方向
+        返回 "left" 或 "right"。"""
+        game = self._game()
+        sheriff_id = game.sheriff_id
+        if not sheriff_id:
+            return "right"
+
+        sheriff = next((p for p in game.players if p.id == sheriff_id), None)
+        if not sheriff:
+            return "right"
+
+        if sheriff.is_ai:
+            # AI 警长随机选择方向
+            direction = random.choice(["left", "right"])
+            await self._announce(f"警长选择了{'逆时针' if direction == 'left' else '顺时针'}发言")
+            return direction
+
+        # 真人警长：广播选择请求
+        game.speak_direction = None
+        deadline = set_deadline(self.game_id, 15)
+        await self._broadcast(MessageType.speak_direction_request, {
+            "sheriffId": sheriff_id,
+            "deadline": deadline,
+            "totalSeconds": 15,
+        })
+        await self._announce("请警长选择发言方向（顺时针/逆时针）")
+
+        # 等待15秒
+        end_time = asyncio.get_running_loop().time() + 15
+        while asyncio.get_running_loop().time() < end_time:
+            current_game = self._game()
+            if current_game.speak_direction is not None:
+                break
+            await asyncio.sleep(0.5)
+
+        clear_deadline(self.game_id)
+        direction = game.speak_direction or "right"
+        # 重置以备下次使用
+        game.speak_direction = None
+        await self._announce(f"警长选择了{'逆时针' if direction == 'left' else '顺时针'}发言")
+        return direction
+
+    # ------------------------------------------------------------------
+    #  狼人自爆处理（原有）
 
     async def _handle_wolf_self_destruct(self, player_id: str) -> bool:
         """处理狼人自爆：公告 → 遗言 → 警长转让 → 进入夜晚。
@@ -1353,7 +1493,23 @@ class Judge:
         game = self._game()
 
         speak_order_rule = self._preset_rules.get("speak_order", "by_seat")
-        current_speaker_id = begin_speak_turn(self.game_id, speak_order_rule)
+
+        # 确定发言方向和参数
+        sheriff_id = game.sheriff_id
+        first_dead_player_id = game.first_dead_player_id
+        speak_direction: str | None = None
+
+        if sheriff_id:
+            # 有警长：询问发言方向
+            speak_direction = await self._ask_sheriff_direction()
+
+        current_speaker_id = begin_speak_turn(
+            self.game_id,
+            speak_order_rule,
+            sheriff_id=sheriff_id,
+            first_dead_player_id=first_dead_player_id if not sheriff_id else None,
+            speak_direction=speak_direction,
+        )
         speak_turn_ids = game.speak_order or [
             p.id for p in game.players if p.is_alive
         ]
@@ -1399,7 +1555,7 @@ class Judge:
                     wolf_self_destruct(self.game_id, speaker.id)
                     continue_game = await self._handle_wolf_self_destruct(speaker.id)
                     return continue_game
-                speech = await _generate_ai_speech(self.game_id, speaker.id)
+                speech = await _generate_ai_speech(self.game_id, speaker.id, speech_type="day_speak")
                 record_speak(self.game_id, speaker.id, speech)
                 await self._broadcast(MessageType.ai_speak, {
                     "content": speech,

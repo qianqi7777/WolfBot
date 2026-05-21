@@ -59,7 +59,7 @@ const timerClass = computed(() => {
 .timer-bar {
   flex: 1;
   height: 8px;
-  background: #ebeef5;
+  background: var(--border-color, #ebeef5);
   border-radius: 4px;
   overflow: hidden;
 }
@@ -68,7 +68,7 @@ const timerClass = computed(() => {
   border-radius: 4px;
   transition: width 0.25s linear;
 }
-.timer-normal .timer-fill { background: #409eff; }
+.timer-normal .timer-fill { background: var(--accent-color, #409eff); }
 .timer-warning .timer-fill { background: #e6a23c; }
 .timer-critical .timer-fill { background: #f56c6c; }
 .timer-text {
@@ -76,6 +76,7 @@ const timerClass = computed(() => {
   font-weight: bold;
   min-width: 32px;
   text-align: right;
+  color: var(--text-primary);
 }
 .timer-warning .timer-text { color: #e6a23c; }
 .timer-critical .timer-text { color: #f56c6c; }

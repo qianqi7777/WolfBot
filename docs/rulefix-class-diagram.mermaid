@@ -1,0 +1,105 @@
+classDiagram
+    class Player {
+        +str id
+        +str name
+        +int seat_number
+        +RoleType role
+        +bool is_ai
+        +bool is_alive
+        +bool night_action_done
+        +str|None last_guard_target_id
+        +bool vote_immunity_used
+        +bool is_sheriff
+        +bool antidote_used
+        +bool poison_used
+        +bool is_spectator
+        +str|None avatar_url
+        +str|None last_prophet_target_id
+        +bool is_idiot_revealed
+    }
+
+    class GameState {
+        +str game_id
+        +list~Player~ players
+        +GameStatus game_status
+        +int current_round
+        +str|None current_speaker_id
+        +bool started
+        +str|None winner_faction
+        +list~dict~ chats
+        +list~dict~ votes
+        +list~str~ announcements
+        +str owner_player_id
+        +str created_at
+        +bool ai_cycle_running
+        +list~dict~ night_actions
+        +list~str~ speak_order
+        +bool speak_turn_submitted
+        +RoomRuntimeSettings room_settings
+        +str|None deadline
+        +dict~str,str~ role_selections
+        +str game_mode
+        +list~dict~ round_events
+        +str|None sheriff_id
+        +list~str~ sheriff_candidate_ids
+        +list~dict~ sheriff_votes
+        +bool sheriff_campaign_submitted
+        +str|None wolf_self_destructed
+        +int sheriff_self_destruct_count
+        +str|None pending_hunter_shoot
+        +bool hunter_killed_by_poison
+        +str room_code
+        +str|None speak_direction
+        +str|None first_dead_player_id
+    }
+
+    class RoleSkill {
+        +RoleType role_id
+        +str name
+        +str faction
+        +bool has_night_action
+        +str night_action_type
+        +str ai_hint
+        +str human_hint
+        +list~str~ mock_speeches
+        +bool can_target_self
+        +bool can_target_self_first_night
+        +bool consecutive_target_allowed
+        +str win_faction_label
+    }
+
+    class Judge {
+        +str game_id
+        +dict _preset_rules
+        +BaseGameMode|None _mode
+        +_game() GameState
+        +_broadcast(msg_type, payload)
+        +_announce(content)
+        +_send_to_player(player_id, msg_type, payload)
+        +_wait_last_words(player_id, player_name, timeout)
+        +_handle_hunter_shoot() bool
+        +_check_hunter_last_god() bool
+        +night_phase() bool
+        +day_phase() bool
+        +speak_phase() bool
+        +vote_phase() bool
+        +sheriff_election_phase() bool
+        +_ask_sheriff_direction() str
+        +_handle_sheriff_withdraw_during_speech()
+        +_generate_ai_sheriff_speech(player) str
+    }
+
+    class AIService {
+        +_generate_ai_speech(game_id, player_id) str
+        +_generate_ai_vote(game_id, player_id) str
+        +_generate_ai_night_action(game_id, player_id) tuple
+        +_get_suspicious_players(store, candidates) list
+        +_call_openai_compatible(game_id, messages) str|None
+    }
+
+    Player --> GameState : belongs to
+    RoleSkill --> Player : defines behavior
+    Judge --> GameState : controls
+    Judge --> RoleSkill : uses
+    Judge --> AIService : delegates AI
+    AIService --> GameState : reads state

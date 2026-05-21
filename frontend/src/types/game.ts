@@ -54,11 +54,14 @@ export interface Player {
   role: RoleType;
   isAI: boolean;
   isAlive: boolean;
+  avatarUrl?: string;
   lastGuardTargetId?: string | null;
   isSheriff?: boolean;
   antidoteUsed?: boolean;
   poisonUsed?: boolean;
   isSpectator?: boolean;
+  isIdiotRevealed?: boolean;
+  lastProphetTargetId?: string | null;
 }
 
 export interface ChatMessage {
@@ -203,6 +206,7 @@ export interface SheriffSpeechTurnPayload {
   turnCount: number;
   deadline: string;
   totalSeconds: number;
+  canWithdraw?: boolean;
 }
 
 // 警长竞选投票载荷
@@ -228,6 +232,18 @@ export interface SheriffTransferPayload {
   candidateIds?: string[];
   deadline?: string;
   totalSeconds?: number;
+}
+
+// 发言方向选择请求载荷
+export interface SpeakDirectionRequestPayload {
+  sheriffId: string;
+  deadline?: string;
+  totalSeconds?: number;
+}
+
+// 发言方向选择载荷
+export interface SpeakDirectionPayload {
+  direction: 'left' | 'right';
 }
 
 // 狼人自爆载荷
@@ -284,6 +300,7 @@ export interface SocketMessage<TPayload = Record<string, unknown>> {
     | 'sheriff_elect_result'
     | 'sheriff_transfer'
     | 'wolf_self_destruct'
+    | 'speak_direction_request'
     | 'error';
   payload?: TPayload;
   timestamp?: string;

@@ -2,7 +2,7 @@
   "base_url": "https://ark.cn-beijing.volces.com/api/v3",
   "api_key": "ark-9d875fda-2230-413c-b729-a04ee49815b4-b4190",
   "model": "doubao-seed-1-8-251228",
-  "timeout_seconds": 30.0,
+  "timeout_seconds": 31.0,
   "temperature": 0.7,
   "enable_mock": false
 }

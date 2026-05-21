@@ -23,6 +23,7 @@ import type {
   SheriffElectResultPayload,
   SheriffTransferPayload,
   WolfSelfDestructPayload,
+  SpeakDirectionRequestPayload,
 } from '@/types/game';
 
 const GAME_STATUSES: GameStatus[] = ['waiting', 'role_select', 'night', 'day', 'sheriff_election', 'speak', 'vote', 'end'];
@@ -454,6 +455,7 @@ export function useGameSocket() {
             turnCount: typeof message.payload.turnCount === 'number' ? message.payload.turnCount : 1,
             deadline: typeof message.payload.deadline === 'string' ? message.payload.deadline : '',
             totalSeconds: typeof message.payload.totalSeconds === 'number' ? message.payload.totalSeconds : 15,
+            canWithdraw: message.payload.canWithdraw === true,
           };
           store.setSheriffSpeechTurn(speechPayload);
           store.setCurrentSpeakerId(speechPayload.currentSpeakerId);
@@ -501,6 +503,23 @@ export function useGameSocket() {
           store.setWolfSelfDestructed(destructPayload);
           store.updatePlayerStatus(destructPayload.playerId, false);
           store.addAnnounce(`⚠️ ${destructPayload.playerName} 自爆了！身份是狼人！`);
+        }
+        break;
+      case 'speak_direction_request':
+        if (isRecord(message.payload) && typeof message.payload.sheriffId === 'string') {
+          const directionPayload: SpeakDirectionRequestPayload = {
+            sheriffId: message.payload.sheriffId,
+            deadline: typeof message.payload.deadline === 'string' ? message.payload.deadline : undefined,
+            totalSeconds: typeof message.payload.totalSeconds === 'number' ? message.payload.totalSeconds : undefined,
+          };
+          store.setSpeakDirectionRequest(directionPayload);
+          if (directionPayload.deadline) {
+            store.setDeadline(directionPayload.deadline);
+          }
+          if (directionPayload.totalSeconds) {
+            store.setCurrentPhaseTimeout(directionPayload.totalSeconds);
+          }
+          store.addAnnounce('警长正在选择发言方向...');
         }
         break;
       case 'sheriff_transfer':

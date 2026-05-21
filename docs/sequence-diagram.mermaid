@@ -1,90 +1,58 @@
 sequenceDiagram
-    participant Client as 前端
-    participant WS as WebSocket
-    participant AISvc as ai_service
-    participant GSvc as game_service
-    participant Bcast as broadcaster
+    participant User as 玩家
+    participant GP as GamePlay.vue
+    participant Store as gameStore
+    participant Socket as useGameSocket
+    participant CT as CircleTable
+    participant PS as PlayerSeat
 
-    Note over Client,Bcast: ===== 游戏开始 =====
-    Client->>WS: start
-    WS->>GSvc: start_game(game_id)
-    GSvc.>GSvc: _assign_roles(players) 动态分配
-    GSvc-->>GSvc: game_status = night
-    WS->>Client: role_info {role}
-    WS->>Bcast: game_status {status: night}
+    User->>GP: 进入游戏页面
+    GP->>Store: 读取 gameStatus / myId
+    GP->>GP: 计算 isNight = gameStatus === 'night'
+    GP->>GP: 设置 data-theme = isNight ? 'dark' : 'light'
+    GP->>CT: 传入 players + currentSpeakerId + myId
+    CT->>CT: calculateSeatPositions() 计算每个座位的角度/位移
+    CT->>PS: v-for 渲染 PlayerSeat (player, isSpeaking, isSelf, seatIndex, totalSeats)
+    PS->>PS: getPlayerAvatar(player) 获取头像
+    PS->>PS: 应用 CSS transform 定位到环形位置
+    PS->>PS: 根据 isSpeaking 添加高亮动画 class
 
-    Note over Client,Bcast: ===== 夜间阶段 =====
-    AISvc->>GSvc: set_game_status(night)
-    AISvc->>Bcast: game_status {status: night, currentRound}
+    Socket->>Store: 收到 game_status 消息 (status: 'night')
+    Store->>GP: gameStatus 响应式更新
+    GP->>GP: isNight 变为 true，data-theme 切换为 'dark'
+    Note over GP: CSS 变量切换，所有子组件自动适配暗色
 
-    loop 每个AI狼人
-        AISvc->>AISvc: _generate_ai_night_action(game_id, ai_wolf_id)
-        AISvc->>GSvc: record_night_action(game_id, ai_wolf_id, target_id)
-    end
+    Socket->>Store: 收到 speak_turn 消息 (currentSpeakerId: 'xxx')
+    Store->>CT: currentSpeakerId 更新
+    CT->>PS: isSpeaking 更新，对应座位添加脉冲动画
 
-    loop 每个AI预言家
-        AISvc->>AISvc: _generate_ai_night_action(game_id, ai_prophet_id)
-        AISvc->>GSvc: record_night_action(game_id, ai_prophet_id, target_id)
-    end
+    Socket->>Store: 收到 player_update (playerId, isAlive: false)
+    Store->>Store: updatePlayerStatus(playerId, false)
+    Store->>CT: players 响应式更新
+    CT->>PS: player.isAlive = false
+    PS->>PS: 添加 .player-dead class (灰度+叉号)
 
-    AISvc->>Bcast: night_action {actionRequired: true}
-    Note over Client: 人类玩家看到夜间行动面板
+    Note over User,PS: 聊天消息流程
 
-    Client->>WS: night_action {targetId}
-    WS->>GSvc: record_night_action(game_id, player_id, target_id)
+    participant CB as ChatBox.vue
+    participant Bubble as ChatBubble.vue
+    participant AU as avatar.ts
+    participant API as gameApi
 
-    AISvc->>AISvc: await sleep(ai_speak_window_seconds)
-    AISvc->>GSvc: resolve_night(game_id)
-    GSvc.>GSvc: 处理夜间结果，标记死亡
-    AISvc->>Bcast: night_result {killedPlayerId, ...}
-    AISvc->>Bcast: player_update {playerId, isAlive: false}
+    User->>CB: 输入消息点击发送
+    CB->>API: submitSpeak(gameId, myId, content)
+    API-->>CB: 200 OK
 
-    alt 游戏结束检查
-        AISvc->>Bcast: game_over
-    end
-
-    Note over Client,Bcast: ===== 白天阶段 =====
-    AISvc->>GSvc: set_game_status(day)
-    AISvc->>Bcast: game_status {status: day, currentRound}
-
-    Note over Client,Bcast: ===== 发言阶段 =====
-    AISvc->>GSvc: set_game_status(speak)
-    AISvc->>Bcast: game_status {status: speak}
-
-    loop 每个AI玩家
-        AISvc->>AISvc: _generate_ai_speech(game_id, ai_player_id)
-        AISvc->>GSvc: record_speak(game_id, ai_player_id, speech)
-        AISvc->>Bcast: ai_speak {content, playerId, playerName}
-    end
-
-    Note over Client: 人类发言窗口开启
-    Client->>WS: speak {content}
-    WS->>GSvc: record_speak(game_id, player_id, content)
-    WS->>Bcast: player_speak {content, playerId, playerName}
-
-    AISvc->>AISvc: await sleep(ai_speak_window_seconds)
-
-    Note over Client,Bcast: ===== 投票阶段 =====
-    AISvc->>GSvc: set_game_status(vote)
-    AISvc->>Bcast: game_status {status: vote}
-
-    loop 每个AI玩家
-        AISvc->>AISvc: _generate_ai_vote(game_id, ai_player_id) 角色遮蔽
-        AISvc->>GSvc: record_vote(game_id, ai_player_id, target_id)
-        AISvc->>Bcast: vote_result {voterId, targetId}
-    end
-
-    Note over Client: 人类投票窗口开启
-    Client->>WS: vote {targetId}
-    WS->>GSvc: record_vote(game_id, player_id, target_id)
-    WS->>Bcast: vote_result {voterId, targetId}
-
-    AISvc->>AISvc: await sleep(ai_vote_window_seconds)
-    AISvc->>GSvc: resolve_vote_round(game_id)
-
-    alt 游戏结束
-        AISvc->>Bcast: game_over
-    else 继续下一轮
-        AISvc->>GSvc: clear_votes(game_id)
-        Note over AISvc: 回到夜间阶段
+    Note over Store: WebSocket 收到 player_speak / ai_speak
+    Store->>CB: chatList 响应式更新
+    CB->>Bubble: v-for 渲染 ChatBubble (message, myId, player)
+    Bubble->>Bubble: 判断 message.playerId === myId ?
+    alt 自己的消息
+        Bubble->>Bubble: 靠右对齐，主色调气泡
+    else AI 的消息
+        Bubble->>AU: getPlayerAvatar(player) → AI 头像
+        Bubble->>Bubble: 靠左对齐，AI 标识色气泡
+    else 其他玩家消息
+        Bubble->>AU: getPlayerAvatar(player) → 真人头像
+        Bubble->>Bubble: 靠左对齐，灰色气泡
     end

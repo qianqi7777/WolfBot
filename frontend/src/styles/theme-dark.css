@@ -1,0 +1,72 @@
+/* 暗色主题 CSS 变量定义 */
+[data-theme="dark"] {
+  --bg-primary: #1a1a2e;
+  --bg-card: rgba(255, 255, 255, 0.08);
+  --bg-card-glass: rgba(255, 255, 255, 0.05);
+  --bg-bubble-self: #2563eb;
+  --bg-bubble-other: rgba(255, 255, 255, 0.1);
+  --bg-bubble-ai: rgba(139, 92, 246, 0.2);
+  --text-primary: #e5e7eb;
+  --text-secondary: #9ca3af;
+  --text-bubble-self: #ffffff;
+  --text-bubble-other: #e5e7eb;
+  --accent-color: #60a5fa;
+  --border-color: rgba(255, 255, 255, 0.12);
+  --speaker-glow: rgba(96, 165, 250, 0.7);
+  --table-bg: radial-gradient(ellipse at center, rgba(30, 40, 80, 0.6) 0%, transparent 70%);
+  --faction-wolf: #f87171;
+  --faction-civilian: #4ade80;
+}
+
+/* 暗色主题下 Element Plus 组件覆盖 */
+[data-theme="dark"] .el-card {
+  background: var(--bg-card);
+  border-color: var(--border-color);
+  color: var(--text-primary);
+}
+
+[data-theme="dark"] .el-card__header {
+  color: var(--text-primary);
+  border-bottom-color: var(--border-color);
+}
+
+[data-theme="dark"] .el-alert {
+  background: var(--bg-card);
+  border-color: var(--border-color);
+}
+
+[data-theme="dark"] .el-tag {
+  border-color: var(--border-color);
+}
+
+[data-theme="dark"] .el-input__wrapper {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: var(--border-color);
+  box-shadow: none;
+}
+
+[data-theme="dark"] .el-input__inner {
+  color: var(--text-primary);
+}
+
+[data-theme="dark"] .el-textarea__inner {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-primary);
+  border-color: var(--border-color);
+}
+
+[data-theme="dark"] .el-radio {
+  color: var(--text-primary);
+}
+
+[data-theme="dark"] .el-radio__label {
+  color: var(--text-primary);
+}
+
+[data-theme="dark"] .el-timeline-item__content {
+  color: var(--text-primary);
+}
+
+[data-theme="dark"] .el-timeline-item__timestamp {
+  color: var(--text-secondary);
+}

@@ -54,6 +54,26 @@
           :disabled="false"
           @submit="handleCampaignSpeech"
         />
+        <el-button
+          v-if="isCandidate"
+          type="info"
+          size="small"
+          class="withdraw-btn"
+          @click="handleCampaign('withdraw')"
+        >
+          退水（放弃竞选）
+        </el-button>
+      </div>
+      <div v-else-if="isCandidate && !isCurrentSpeaker" class="waiting-hint">
+        <el-alert type="info" :closable="false" description="等待其他候选人发言..." />
+        <el-button
+          type="info"
+          size="small"
+          class="withdraw-btn"
+          @click="handleCampaign('withdraw')"
+        >
+          退水（放弃竞选）
+        </el-button>
       </div>
       <div v-else class="waiting-hint">
         <el-alert type="info" :closable="false" description="等待候选人发言..." />
@@ -245,6 +265,17 @@ function handleTransfer(targetId: string) {
 
 .vote-btn {
   min-width: 100px;
+}
+
+.speech-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.withdraw-btn {
+  align-self: flex-start;
+  margin-top: 4px;
 }
 
 .waiting-hint {

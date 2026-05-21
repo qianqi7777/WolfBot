@@ -72,3 +72,33 @@ export const VOTE_TIE_LABELS: Record<string, string> = {
   re_vote: '平票重新投票',
   both_eliminated: '平票双双出局',
 };
+
+// 阵营定义：每个角色所属阵营
+export const ROLE_FACTION: Record<RoleType, 'wolf' | 'civilian'> = {
+  wolf: 'wolf',
+  civilian: 'civilian',
+  prophet: 'civilian',
+  guard: 'civilian',
+  hunter: 'civilian',
+  witch: 'civilian',
+  idiot: 'civilian',
+  unknown: 'civilian',
+};
+
+// 阵营标签
+export const FACTION_LABELS: Record<string, string> = {
+  wolf: '狼人阵营',
+  civilian: '好人阵营',
+};
+
+// 角色技能简述
+export const ROLE_SKILL_DESC: Record<RoleType, string> = {
+  wolf: '夜间与同伴协商击杀一名玩家',
+  civilian: '通过发言和投票找出狼人',
+  prophet: '每晚可查验一名玩家的身份',
+  guard: '每晚可守护一名玩家免受袭击',
+  hunter: '死亡时可以开枪带走一名玩家',
+  witch: '拥有一瓶解药和一瓶毒药',
+  idiot: '被投票放逐时可翻牌免疫出局',
+  unknown: '身份尚未分配',
+};

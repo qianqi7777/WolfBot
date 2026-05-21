@@ -1,114 +1,173 @@
 <template>
-  <div class="page-shell game-layout">
-    <!-- 左栏：操作区 -->
-    <div class="game-left">
+  <!-- 三段式布局：顶栏 + 中央圆桌 + 底部操作栏 + 暗色主题切换 -->
+  <div
+    class="game-play-shell"
+    :data-theme="isNight ? 'dark' : 'light'"
+  >
+    <!-- 顶栏：GameStatus + CountdownTimer -->
+    <div class="game-top-bar">
       <GameStatus :status="store.gameStatus" :round="store.currentRound" />
       <CountdownTimer
         :deadline="store.deadline"
         :total-seconds="currentPhaseTimeout"
       />
       <RoleCard :role="store.myRole" />
-      <el-alert
-        v-if="currentSpeakerName"
-        :title="`轮到 ${currentSpeakerName} 发言`"
-        type="info"
-        show-icon
-        :closable="false"
-      />
+    </div>
+
+    <!-- 中央区域：圆桌 + 中央浮动内容 -->
+    <div class="game-center">
+      <PlayerList
+        :players="store.players"
+        :current-speaker-id="store.currentSpeakerId"
+        :my-id="store.myId"
+      >
+        <!-- 中央浮动内容 -->
+        <div class="center-content">
+          <!-- 发言者提示 -->
+          <div v-if="currentSpeakerName" class="speaker-hint animate-fade-in">
+            <el-alert
+              :title="`轮到 ${currentSpeakerName} 发言`"
+              type="info"
+              show-icon
+              :closable="false"
+            />
+          </div>
+          <!-- 系统公告 -->
+          <Announce :announcements="store.announceList" />
+        </div>
+      </PlayerList>
+    </div>
+
+    <!-- 底部操作栏 -->
+    <div class="game-bottom-bar">
+      <!-- 聊天区域 -->
       <ChatBox
         :messages="store.chatList"
         :disabled="!canPlayerSpeakNow"
+        :my-id="store.myId"
+        :players="store.players"
         @submit="submitSpeak"
       />
-      <VotePanel
-        :players="store.alivePlayers"
-        :disabled="!canPlayerVote(store.gameStatus, selfPlayer ?? undefined)"
-        :current-player-id="store.myId"
-        @submit="submitVote"
-      />
-      <!-- 狼人自爆按钮 -->
-      <el-button
-        v-if="canWolfSelfDestruct"
-        type="danger"
-        @click="handleWolfSelfDestruct"
-        style="width: 100%"
-      >
-        💀 狼人自爆
-      </el-button>
-      <!-- 投票结果明细展示 -->
-      <el-card v-if="voteSummaryDisplay" class="vote-summary-card" shadow="always">
-        <template #header>投票结果</template>
-        <div class="vote-summary-content">
-          <div v-for="item in voteSummaryDisplay.targets" :key="item.targetSeat" class="vote-target-row">
-            <div class="vote-target-header">
-              <el-tag type="danger" effect="dark">{{ item.targetSeat }}号({{ item.targetName }})</el-tag>
-              <span class="vote-count">{{ item.voterSeats.length }}票</span>
-            </div>
-            <div class="vote-voters">
-              <el-tag
-                v-for="(seat, idx) in item.voterSeats"
-                :key="seat"
-                size="small"
-                type="info"
-                class="vote-voter-tag"
-              >
-                {{ seat }}号({{ item.voterNames[idx] }})
-              </el-tag>
-            </div>
-          </div>
-          <!-- 弃票展示 -->
-          <div v-if="voteSummaryDisplay.abstainVoters.length" class="vote-target-row abstain-row">
-            <div class="vote-target-header">
-              <el-tag type="info" effect="dark">弃票</el-tag>
-              <span class="vote-count">{{ voteSummaryDisplay.abstainVoters.length }}人</span>
-            </div>
-            <div class="vote-voters">
-              <el-tag
-                v-for="av in voteSummaryDisplay.abstainVoters"
-                :key="av.voterSeat"
-                size="small"
-                type="info"
-                class="vote-voter-tag"
-              >
-                {{ av.voterSeat }}号({{ av.voterName }})
-              </el-tag>
-            </div>
-          </div>
-        </div>
-      </el-card>
-      <!-- 抢身份阶段 -->
-      <RoleSelect v-if="store.gameStatus === 'role_select' && store.roleSelectStart" />
-      <!-- 警长竞选阶段 -->
-      <SheriffElection v-if="showSheriffElection" />
-      <NightAction
-        v-if="showNightAction"
-        :role="store.myRole"
-        :players="store.alivePlayers"
-        :current-player-id="store.myId"
-        :night-result="store.nightResult"
-        :teammate-seats="store.wolfTeammates"
-        :wolf-target-updates="store.wolfTargetUpdates"
-        :antidote-used="selfPlayer?.antidoteUsed"
-        :poison-used="selfPlayer?.poisonUsed"
-        :wolf-kill-target-id="store.wolfKillTargetId"
-        :wolf-kill-target-label="store.wolfKillTargetLabel"
-        @submit="submitNightActionHandler"
-      />
-      <!-- 预言家查验结果独立展示（NightAction提交后组件卸载，结果在此持续显示） -->
-      <el-card v-if="prophetCheckDisplay" class="prophet-check-card" shadow="always">
-        <template #header>查验结果</template>
-        <el-alert
-          :title="`${prophetCheckDisplay.seatLabel} 的身份是：${prophetCheckDisplay.roleLabel}`"
-          :type="prophetCheckDisplay.role === 'wolf' ? 'error' : 'success'"
-          show-icon
-          :closable="false"
+
+      <!-- 操作面板区域 -->
+      <div class="action-panels">
+        <!-- 投票面板 -->
+        <VotePanel
+          v-if="store.gameStatus === 'vote'"
+          :players="store.alivePlayers"
+          :disabled="!canPlayerVote(store.gameStatus, selfPlayer ?? undefined)"
+          :current-player-id="store.myId"
+          @submit="submitVote"
         />
-      </el-card>
-    </div>
-    <!-- 右栏：信息流 -->
-    <div class="game-right">
-      <PlayerList :players="store.players" />
-      <Announce :announcements="store.announceList" />
+
+        <!-- 狼人自爆按钮 -->
+        <el-button
+          v-if="canWolfSelfDestruct"
+          type="danger"
+          @click="handleWolfSelfDestruct"
+          style="width: 100%"
+        >
+          💀 狼人自爆
+        </el-button>
+
+        <!-- 抢身份阶段 -->
+        <RoleSelect v-if="store.gameStatus === 'role_select' && store.roleSelectStart" />
+
+        <!-- 警长竞选阶段 -->
+        <SheriffElection v-if="showSheriffElection" />
+
+        <!-- 警长选择发言方向 -->
+        <el-card v-if="showSpeakDirection" class="speak-direction-card" shadow="always">
+          <template #header>
+            <div class="speak-direction-header">
+              <span>警长选择发言方向</span>
+            </div>
+          </template>
+          <template v-if="isSheriffForDirection">
+            <p class="phase-desc">请选择本轮发言的方向</p>
+            <div class="speak-direction-actions">
+              <el-button type="primary" @click="handleSpeakDirection('left')">
+                ⬅ 逆时针（从左开始）
+              </el-button>
+              <el-button type="success" @click="handleSpeakDirection('right')">
+                顺时针（从右开始）➡
+              </el-button>
+            </div>
+          </template>
+          <template v-else>
+            <el-alert type="info" :closable="false" description="警长正在选择发言方向，请等待..." />
+          </template>
+        </el-card>
+
+        <!-- 夜间行动 -->
+        <NightAction
+          v-if="showNightAction"
+          :role="store.myRole"
+          :players="store.alivePlayers"
+          :current-player-id="store.myId"
+          :night-result="store.nightResult"
+          :teammate-seats="store.wolfTeammates"
+          :wolf-target-updates="store.wolfTargetUpdates"
+          :antidote-used="selfPlayer?.antidoteUsed"
+          :poison-used="selfPlayer?.poisonUsed"
+          :wolf-kill-target-id="store.wolfKillTargetId"
+          :wolf-kill-target-label="store.wolfKillTargetLabel"
+          @submit="submitNightActionHandler"
+        />
+
+        <!-- 投票结果明细展示 -->
+        <el-card v-if="voteSummaryDisplay" class="vote-summary-card" shadow="always">
+          <template #header>投票结果</template>
+          <div class="vote-summary-content">
+            <div v-for="item in voteSummaryDisplay.targets" :key="item.targetSeat" class="vote-target-row">
+              <div class="vote-target-header">
+                <el-tag type="danger" effect="dark">{{ item.targetSeat }}号({{ item.targetName }})</el-tag>
+                <span class="vote-count">{{ item.voterSeats.length }}票</span>
+              </div>
+              <div class="vote-voters">
+                <el-tag
+                  v-for="(seat, idx) in item.voterSeats"
+                  :key="seat"
+                  size="small"
+                  type="info"
+                  class="vote-voter-tag"
+                >
+                  {{ seat }}号({{ item.voterNames[idx] }})
+                </el-tag>
+              </div>
+            </div>
+            <!-- 弃票展示 -->
+            <div v-if="voteSummaryDisplay.abstainVoters.length" class="vote-target-row abstain-row">
+              <div class="vote-target-header">
+                <el-tag type="info" effect="dark">弃票</el-tag>
+                <span class="vote-count">{{ voteSummaryDisplay.abstainVoters.length }}人</span>
+              </div>
+              <div class="vote-voters">
+                <el-tag
+                  v-for="av in voteSummaryDisplay.abstainVoters"
+                  :key="av.voterSeat"
+                  size="small"
+                  type="info"
+                  class="vote-voter-tag"
+                >
+                  {{ av.voterSeat }}号({{ av.voterName }})
+                </el-tag>
+              </div>
+            </div>
+          </div>
+        </el-card>
+
+        <!-- 预言家查验结果独立展示 -->
+        <el-card v-if="prophetCheckDisplay" class="prophet-check-card" shadow="always">
+          <template #header>查验结果</template>
+          <el-alert
+            :title="`${prophetCheckDisplay.seatLabel} 的身份是：${prophetCheckDisplay.roleLabel}`"
+            :type="prophetCheckDisplay.role === 'wolf' ? 'error' : 'success'"
+            show-icon
+            :closable="false"
+          />
+        </el-card>
+      </div>
     </div>
   </div>
 </template>
@@ -130,7 +189,6 @@ import VotePanel from '@/components/common/VotePanel.vue';
 import RoleCard from '@/components/common/RoleCard.vue';
 import GameStatus from '@/components/game/GameStatus.vue';
 import PlayerList from '@/components/game/PlayerList.vue';
-import { ROLE_LABELS } from '@/utils/constants';
 import { useGameLogic } from '@/hooks/useGameLogic';
 import { useGameSocket } from '@/hooks/useGameSocket';
 import { useGameStore } from '@/store/modules/gameStore';
@@ -139,6 +197,9 @@ const store = useGameStore();
 const { connect, disconnect, send } = useGameSocket();
 const { canPlayerSpeak, canPlayerVote, canPlayerNightAction } = useGameLogic();
 const router = useRouter();
+
+/** 是否是夜间（用于主题切换） */
+const isNight = computed(() => store.gameStatus === 'night');
 
 const selfPlayer = computed(() => store.selfPlayer);
 const currentPhaseTimeout = computed(() => store.currentPhaseTimeout);
@@ -172,13 +233,29 @@ const showSheriffElection = computed(
      store.sheriffVoteStart !== null || store.sheriffElectResult !== null),
 );
 
-/** 是否显示狼人自爆按钮 */
+/** 是否显示狼人自爆按钮（发言/投票/竞选阶段均可自爆） */
 const canWolfSelfDestruct = computed(
   () => store.myRole === 'wolf'
-    && (store.gameStatus === 'speak' || store.gameStatus === 'vote')
+    && (store.gameStatus === 'speak' || store.gameStatus === 'vote' || store.gameStatus === 'sheriff_election')
     && selfPlayer.value?.isAlive === true
     && !store.wolfSelfDestructed,
 );
+
+/** 是否显示发言方向选择面板 */
+const showSpeakDirection = computed(
+  () => store.speakDirectionRequest !== null && store.gameStatus === 'speak',
+);
+
+/** 当前用户是否是负责选方向的警长 */
+const isSheriffForDirection = computed(
+  () => store.speakDirectionRequest?.sheriffId === store.myId,
+);
+
+/** 处理警长选择发言方向 */
+const handleSpeakDirection = (direction: 'left' | 'right') => {
+  send({ type: 'speak_direction', payload: { direction } });
+  store.setSpeakDirectionRequest(null);
+};
 
 /** 狼人自爆确认 */
 const handleWolfSelfDestruct = async () => {
@@ -194,16 +271,15 @@ const handleWolfSelfDestruct = async () => {
   }
 };
 
-/** 预言家查验结果：从 announce 私发消息中获取，暂不在此解析 */
+/** 预言家查验结果 */
 const prophetCheckDisplay = computed(() => {
   // TODO: Phase 2 中从私发 announce 消息解析预言家查验结果
   return null;
 });
 
-/** 投票结果汇总：按被投目标分组，显示谁投了谁；弃票单独展示 */
+/** 投票结果汇总 */
 const voteSummaryDisplay = computed(() => {
   if (!store.voteSummary?.votes.length) return null;
-  // 按 targetSeat 分组（弃票 'abstain' 单独处理）
   const grouped: Record<string, { targetSeat: number; targetName: string; voterSeats: number[]; voterNames: string[] }> = {};
   const abstainVoters: { voterSeat: number; voterName: string }[] = [];
   for (const v of store.voteSummary.votes) {
@@ -240,7 +316,6 @@ const getErrorMessage = (error: unknown, fallback: string) => {
 const submitSpeak = async (content: string) => {
   try {
     if (store.isLastWords) {
-      // 遗言通过 WebSocket 发送 last_words 消息类型
       send({ type: 'last_words', payload: { content } });
       store.setIsLastWords(false);
     } else {
@@ -290,34 +365,84 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-.game-layout {
-  display: grid;
-  grid-template-columns: 1fr 320px;
-  gap: 16px;
-  align-items: start;
-}
-
-.game-left {
+/* 三段式布局容器 */
+.game-play-shell {
   display: flex;
   flex-direction: column;
+  min-height: 100vh;
+  min-width: 768px;
+  background: var(--bg-primary);
+  transition: background 0.5s ease, color 0.5s ease;
+  padding: 12px 16px;
   gap: 12px;
-  min-width: 0;
 }
 
-.game-right {
+/* 顶栏 */
+.game-top-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+  padding: 8px 12px;
+  background: var(--bg-card);
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  transition: background 0.5s ease, border-color 0.5s ease;
+}
+
+/* 中央区域：圆桌 */
+.game-center {
+  flex: 1;
+  min-height: 360px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  transition: background 0.5s ease;
+}
+
+/* 中央浮动内容 */
+.center-content {
   display: flex;
   flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  max-height: 180px;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.speaker-hint {
+  pointer-events: auto;
+}
+
+/* 底部操作栏 */
+.game-bottom-bar {
+  flex-shrink: 0;
+  display: flex;
   gap: 12px;
   position: sticky;
-  top: 24px;
-  max-height: calc(100vh - 48px);
+  bottom: 0;
+  background: var(--bg-card-glass);
+  backdrop-filter: blur(8px);
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  padding: 8px;
+  transition: background 0.5s ease, border-color 0.5s ease;
+}
+
+/* 操作面板区域 */
+.action-panels {
+  flex: 1;
+  min-width: 280px;
+  max-height: 360px;
   overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
-.prophet-check-card {
-  animation: fadeIn 0.3s ease;
-}
-
+/* 投票结果卡片 */
 .vote-summary-card {
   animation: fadeIn 0.3s ease;
 }
@@ -330,7 +455,7 @@ onUnmounted(() => {
 
 .vote-target-row {
   padding: 6px 0;
-  border-bottom: 1px solid var(--el-border-color-lighter);
+  border-bottom: 1px solid var(--border-color);
 }
 
 .vote-target-row:last-child {
@@ -345,7 +470,7 @@ onUnmounted(() => {
 }
 
 .vote-count {
-  color: var(--el-color-danger);
+  color: var(--faction-wolf, #ef4444);
   font-weight: bold;
   font-size: 14px;
 }
@@ -362,8 +487,34 @@ onUnmounted(() => {
 }
 
 .abstain-row {
-  border-top: 1px dashed var(--el-border-color);
+  border-top: 1px dashed var(--border-color);
   padding-top: 8px;
+}
+
+.prophet-check-card {
+  animation: fadeIn 0.3s ease;
+}
+
+/* 发言方向选择卡片 */
+.speak-direction-card {
+  animation: fadeIn 0.3s ease;
+}
+
+.speak-direction-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.speak-direction-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+/* 渐入动画 */
+.animate-fade-in {
+  animation: fadeIn 0.3s ease;
 }
 
 @keyframes fadeIn {
@@ -372,12 +523,11 @@ onUnmounted(() => {
 }
 
 @media (max-width: 768px) {
-  .game-layout {
-    grid-template-columns: 1fr;
+  .game-bottom-bar {
+    flex-direction: column;
   }
-  .game-right {
-    position: static;
-    max-height: none;
+  .action-panels {
+    min-width: unset;
   }
 }
 </style>

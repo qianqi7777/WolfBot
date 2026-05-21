@@ -5,7 +5,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from app.core.exceptions import AppError
 from app.domain.enums import MessageType
 from app.schemas.socket import SocketMessage
-from app.services.game_service import change_seat, get_game, get_game_state, get_player_role, record_night_action, record_speak, record_last_words, record_vote, start_game, record_role_selection, register_sheriff_campaign, withdraw_sheriff_campaign, record_sheriff_vote, transfer_sheriff_badge, wolf_self_destruct
+from app.services.game_service import change_seat, get_game, get_game_state, get_player_role, record_night_action, record_speak, record_last_words, record_vote, start_game, record_role_selection, register_sheriff_campaign, withdraw_sheriff_campaign, record_sheriff_vote, transfer_sheriff_badge, wolf_self_destruct, _check_win_condition
 from app.domain.enums import GameStatus, RoleType
 from app.domain.roles import SKILL_REGISTRY
 from app.services.ai_service import launch_ai_cycle
@@ -155,7 +155,22 @@ async def game_ws(websocket: WebSocket) -> None:
                 if target_id and (player_id or snapshot.player_id):
                     try:
                         actor_id = player_id or snapshot.player_id
-                        record_night_action(game_id, actor_id, target_id, action_type)
+                        # 女巫解药需要传入刀口信息用于校验
+                        game = get_game_state(game_id)
+                        actor = next((p for p in game.players if p.id == actor_id), None)
+                        witch_wolf_target_id = None
+                        if actor and actor.role == RoleType.witch and action_type == "save":
+                            # 从已提交的狼人行动中计算刀口
+                            wolf_targets = []
+                            for action in game.night_actions:
+                                if str(action.get("role", "")) == RoleType.wolf.value:
+                                    wolf_targets.append(str(action.get("targetId", "")))
+                            if wolf_targets:
+                                tally = {}
+                                for tid in wolf_targets:
+                                    tally[tid] = tally.get(tid, 0) + 1
+                                witch_wolf_target_id = max(tally, key=tally.get)
+                        record_night_action(game_id, actor_id, target_id, action_type, witch_wolf_target_id)
                         await manager.send_to(
                             websocket,
                             SocketMessage(
@@ -396,6 +411,32 @@ async def game_ws(websocket: WebSocket) -> None:
                             websocket,
                             SocketMessage(type=MessageType.error, timestamp=utc_now_iso(), payload={"content": exc.message}).model_dump_json(),
                         )
+            elif message_type == "speak_direction":
+                # 警长选择发言方向
+                direction = str(payload.get("direction", "")).strip()
+                if player_id and direction in ("left", "right"):
+                    game = get_game_state(game_id)
+                    # 校验：只有当前警长可以发送此消息
+                    if game.sheriff_id == player_id:
+                        game.speak_direction = direction
+                        await manager.send_to(
+                            websocket,
+                            SocketMessage(
+                                type=MessageType.speak_direction,
+                                timestamp=utc_now_iso(),
+                                payload={"direction": direction},
+                            ).model_dump_json(),
+                        )
+                    else:
+                        await manager.send_to(
+                            websocket,
+                            SocketMessage(type=MessageType.error, timestamp=utc_now_iso(), payload={"content": "只有警长可以选择发言方向"}).model_dump_json(),
+                        )
+                else:
+                    await manager.send_to(
+                        websocket,
+                        SocketMessage(type=MessageType.error, timestamp=utc_now_iso(), payload={"content": "发言方向只能是 left 或 right"}).model_dump_json(),
+                    )
             elif message_type == "hunter_shoot":
                 # 猎人开枪
                 target_id = str(payload.get("targetId", "")).strip()
@@ -429,6 +470,32 @@ async def game_ws(websocket: WebSocket) -> None:
                                     },
                                 ).model_dump_json(),
                             )
+
+                            # 检查被枪杀玩家是否是警长
+                            if game.sheriff_id == target_id:
+                                from app.services.game_service import transfer_sheriff_badge as _transfer_sheriff
+                                # 警长被枪杀，需要转让徽章（由 Judge 处理，这里仅标记）
+                                pass
+
+                            # 检查胜负
+                            from app.domain.roles import get_preset_rule
+                            win_condition = get_preset_rule(game.room_settings.scene.preset, "win_condition")
+                            winner = _check_win_condition(game, win_condition)
+                            if winner:
+                                game.winner_faction = winner
+                                game.game_status = GameStatus.end
+                                await manager.broadcast(
+                                    game_id,
+                                    SocketMessage(
+                                        type=MessageType.game_over,
+                                        timestamp=utc_now_iso(),
+                                        payload={
+                                            "gameId": game_id,
+                                            "winnerFaction": winner,
+                                            "currentRound": game.current_round,
+                                        },
+                                    ).model_dump_json(),
+                                )
             elif message_type == "role_select_choice":
                 chosen_role = str(payload.get("role", "")).strip()
                 if chosen_role and player_id:

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none">
+  <!-- 真人默认头像：简约人形轮廓 -->
+  <circle cx="64" cy="64" r="62" fill="#E8ECF1"/>
+  <circle cx="64" cy="46" r="22" fill="#9CA3AF"/>
+  <path d="M24 108c0-22.091 17.909-40 40-40s40 17.909 40 40v4H24v-4z" fill="#9CA3AF"/>
+</svg>

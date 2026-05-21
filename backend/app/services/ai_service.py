@@ -33,11 +33,23 @@ def _role_hint(role: RoleType) -> str:
 
 
 _PHASE_HINT = {
-    GameStatus.night: "夜晚阶段",
-    GameStatus.day: "白天阶段",
-    GameStatus.speak: "发言阶段（玩家轮流发言）",
-    GameStatus.vote: "投票阶段",
+    GameStatus.night: "夜晚阶段（神职执行技能/狼人讨论击杀目标）",
+    GameStatus.day: "白天阶段（公布夜间结果）",
+    GameStatus.speak: "白天发言阶段（玩家轮流发言讨论）",
+    GameStatus.vote: "投票阶段（投票放逐玩家）",
+    GameStatus.sheriff_election: "警长竞选阶段（竞选发言）",
     GameStatus.end: "游戏结束",
+}
+
+# 遗言阶段提示（特殊阶段，不在GameStatus中）
+_LAST_WORDS_HINT = "遗言阶段（你即将出局，留下最后的话）"
+
+# 发言阶段类型提示（用于更精确地指导AI发言）
+_SPEECH_TYPE_HINT = {
+    "day_speak": "白天发言阶段：分析局势、表达怀疑、为好人阵营提供信息。",
+    "last_words": "遗言阶段：你即将出局，总结你的判断，给存活玩家留下线索。注意：不要暴露队友身份（如果你是狼人，不要提及队友）。",
+    "campaign": "警长竞选发言：说明为什么你适合当警长，展示你的领导力。",
+    "night_discuss": "夜间讨论：狼人团队讨论今晚的击杀目标。",
 }
 
 
@@ -215,7 +227,14 @@ async def test_ai_connection(game_id: str, runtime: AiRuntimeConfig | None = Non
     }
 
 
-async def _generate_ai_speech(game_id: str, player_id: str) -> str:
+async def _generate_ai_speech(game_id: str, player_id: str, speech_type: str = "day_speak") -> str:
+    """生成AI发言。
+    
+    Args:
+        game_id: 游戏ID
+        player_id: 玩家ID
+        speech_type: 发言类型 — day_speak(白天发言) / last_words(遗言) / campaign(竞选发言) / night_discuss(夜间讨论)
+    """
     game = get_game_state(game_id)
     player = next((item for item in game.players if item.id == player_id), None)
     if player is None:
@@ -235,7 +254,13 @@ async def _generate_ai_speech(game_id: str, player_id: str) -> str:
         store.record_speech(speaker_label, str(chat.get("content", "")))
 
     # ── 构建游戏上下文（使用压缩记忆） ──
-    phase_hint = _PHASE_HINT.get(game.game_status, "未知阶段")
+    if speech_type == "last_words":
+        phase_hint = _LAST_WORDS_HINT
+    else:
+        phase_hint = _PHASE_HINT.get(game.game_status, "未知阶段")
+    
+    # 发言阶段类型提示
+    speech_type_hint = _SPEECH_TYPE_HINT.get(speech_type, _SPEECH_TYPE_HINT["day_speak"])
 
     # 座位号映射
     seat_map = get_seat_map(game_id)
@@ -259,6 +284,32 @@ async def _generate_ai_speech(game_id: str, player_id: str) -> str:
             alive_list.append(f"{p.seat_number}号")
     alive_info = f"\n其他存活玩家：{'、'.join(alive_list)}" if alive_list else ""
 
+    # ── 已翻牌白痴信息（Bug #10） ──
+    idiot_revealed = [f"{p.seat_number}号" for p in game.players if p.is_idiot_revealed]
+    idiot_info = f"\n已翻牌白痴（不能投票）：{'、'.join(idiot_revealed)}" if idiot_revealed else ""
+
+    # ── 警长信息（Bug #11） ──
+    sheriff_info = ""
+    if game.sheriff_id:
+        sheriff_p = next((p for p in game.players if p.id == game.sheriff_id), None)
+        if sheriff_p:
+            if sheriff_p.is_alive:
+                sheriff_info = f"\n当前警长：{sheriff_p.seat_number}号（1.5倍票权）"
+            else:
+                sheriff_info = f"\n当前警长：{sheriff_p.seat_number}号（已死亡）"
+
+    # ── 竞选发言上下文（Bug #6） ──
+    election_hint = ""
+    if game.game_status == GameStatus.sheriff_election:
+        election_hint = "\n你正在竞选警长，请说明为什么你适合当警长，展示你的领导力。简要说明你的身份或对场上局势的判断。"
+
+    # ── 遗言阶段特殊提示 ──
+    last_words_hint = ""
+    if speech_type == "last_words":
+        last_words_hint = "\n重要：这是你出局前的遗言。总结你的判断，给存活玩家留下有用的线索。"
+        if player_skill.faction == "wolf":
+            last_words_hint += "注意：不要暴露你的狼人队友身份，不要提及队友的名字或暗示队友是谁。"
+
     # 压缩后的上下文（替代原始发言记录）
     compressed_context = store.build_context(max_tokens=1500)
 
@@ -269,6 +320,8 @@ async def _generate_ai_speech(game_id: str, player_id: str) -> str:
                 "你是在玩狼人杀的AI玩家。请用一句自然的中文发言，不要加引号，不要输出JSON，"
                 "不要重复别人的话，不要暴露自己的AI身份。发言要像真人玩家一样有逻辑和情感。"
                 "提到其他玩家时请用'X号'（如'3号玩家'、'5号'），不要使用内部ID或编号。"
+                + election_hint
+                + last_words_hint
             ),
         },
         {
@@ -276,10 +329,13 @@ async def _generate_ai_speech(game_id: str, player_id: str) -> str:
             "content": (
                 f"{_role_hint(player.role)}\n"
                 f"当前阶段：{phase_hint}\n"
+                f"发言类型：{speech_type_hint}\n"
                 f"当前轮次：第{game.current_round}轮\n"
                 f"你是{my_seat}号玩家\n"
                 f"{teammate_info}"
-                f"{alive_info}\n"
+                f"{alive_info}"
+                f"{idiot_info}"
+                f"{sheriff_info}\n"
                 f"{compressed_context}\n"
                 "请给出你本轮的发言（只用说一句话，自然地参与讨论，提到别人用X号）。"
             ),
@@ -337,6 +393,54 @@ async def _generate_ai_vote(game_id: str, player_id: str) -> str:
         if teammates:
             teammate_vote_hint = f"\n你的狼人队友：{'、'.join(teammates)}，你们应协调投票，不要投队友。"
 
+    # ── 投票上下文：谁投了谁（Bug #7） ──
+    vote_context = ""
+    if game.votes:
+        vote_lines = []
+        seat_map = get_seat_map(game_id)
+        for v in game.votes:
+            voter_id = str(v.get("voterId", ""))
+            target_id = str(v.get("targetId", ""))
+            voter_seat = seat_map.get(voter_id, "?")
+            target_seat = seat_map.get(target_id, "?")
+            if target_id == "abstain":
+                vote_lines.append(f"{voter_seat}号弃票")
+            else:
+                vote_lines.append(f"{voter_seat}号→{target_seat}号")
+        if vote_lines:
+            vote_context = f"\n当前投票情况：{'；'.join(vote_lines)}"
+
+    # ── 本轮发言摘要（Bug #7） ──
+    speech_context = ""
+    round_chats = [
+        c for c in game.chats
+        if c.get("round") == game.current_round or (game.chats.index(c) >= len(game.chats) - 10)
+    ]
+    if round_chats:
+        speech_lines = []
+        seat_map = get_seat_map(game_id)
+        for c in round_chats[-6:]:
+            c_speaker_id = str(c.get("playerId", ""))
+            c_seat = seat_map.get(c_speaker_id, "?")
+            c_content = str(c.get("content", ""))[:50]
+            speech_lines.append(f"{c_seat}号：{c_content}")
+        if speech_lines:
+            speech_context = f"\n近期发言摘要：{'；'.join(speech_lines)}"
+
+    # ── 已翻牌白痴信息（Bug #10） ──
+    idiot_revealed = [f"{p.seat_number}号" for p in game.players if p.is_idiot_revealed]
+    idiot_info = f"\n已翻牌白痴（不能投票）：{'、'.join(idiot_revealed)}" if idiot_revealed else ""
+
+    # ── 警长信息（Bug #11） ──
+    sheriff_info = ""
+    if game.sheriff_id:
+        sheriff_p = next((p for p in game.players if p.id == game.sheriff_id), None)
+        if sheriff_p:
+            if sheriff_p.is_alive:
+                sheriff_info = f"\n当前警长：{sheriff_p.seat_number}号（1.5倍票权）"
+            else:
+                sheriff_info = f"\n当前警长：{sheriff_p.seat_number}号（已死亡）"
+
     messages = [
         {
             "role": "system",
@@ -352,7 +456,11 @@ async def _generate_ai_vote(game_id: str, player_id: str) -> str:
                 f"你是{player.seat_number}号玩家\n"
                 f"当前轮次：第{game.current_round}轮\n"
                 f"候选名单：{json.dumps(candidates, ensure_ascii=False)}\n"
-                f"{teammate_vote_hint}\n"
+                f"{teammate_vote_hint}"
+                f"{vote_context}"
+                f"{speech_context}"
+                f"{idiot_info}"
+                f"{sheriff_info}\n"
                 f"{compressed_context}\n"
                 "请直接返回你要投票的玩家座位号（纯数字，如3）。"
             ),
@@ -404,15 +512,107 @@ async def _generate_ai_night_action(game_id: str, player_id: str) -> tuple[str, 
     else:
         targets = [p for p in game.players if p.is_alive and p.id != player_id]
 
-    # 守卫不能连续守同一人
-    if not skill.consecutive_target_allowed and player.last_guard_target_id:
-        filtered = [p for p in targets if p.id != player.last_guard_target_id]
-        if filtered:
-            targets = filtered
+    # 守卫不能连续守同一人 / 预言家不能连续验同一人
+    if not skill.consecutive_target_allowed:
+        last_target_id: str | None = None
+        if player.role == RoleType.prophet:
+            last_target_id = player.last_prophet_target_id
+        elif player.role == RoleType.guard:
+            last_target_id = player.last_guard_target_id
+        if last_target_id:
+            filtered = [p for p in targets if p.id != last_target_id]
+            if filtered:
+                targets = filtered
 
     if not targets:
         return "", ""
+
+    # ── 预言家策略性选择（Bug #13） ──
+    if player.role == RoleType.prophet:
+        # 策略1：优先验可疑玩家（70%概率）
+        suspicious = _get_suspicious_players(game, targets)
+        if suspicious and random.random() < 0.7:
+            return random.choice(suspicious).id, ""
+        # 策略2：随机验未验过的
+        if targets:
+            return random.choice(targets).id, ""
+        return "", ""
+
+    # ── 守卫策略性选择（Bug #14） ──
+    if player.role == RoleType.guard:
+        # 策略1：倾向守护警长（60%概率）
+        if game.sheriff_id:
+            sheriff_p = next((p for p in targets if p.id == game.sheriff_id), None)
+            if sheriff_p and random.random() < 0.6:
+                return sheriff_p.id, ""
+        # 策略2：从聊天推断预言家并守护（50%概率）
+        claimed_prophet = _get_claimed_prophet(game, targets)
+        if claimed_prophet and random.random() < 0.5:
+            return claimed_prophet.id, ""
+        # 回退：随机守护
+        if targets:
+            return random.choice(targets).id, ""
+        return "", ""
+
     return random.choice(targets).id, ""
+
+
+def _get_suspicious_players(game, candidates: list) -> list:
+    """从聊天记录中提取可疑玩家（Bug #13 辅助函数）。
+    搜索发言中包含"X号可疑"/"怀疑X号"/"X是狼"等模式的玩家，
+    返回 candidates 中被怀疑的玩家列表。
+    """
+    import re
+    suspicious_seat_counts: dict[int, int] = {}
+    seat_map = get_seat_map(game.game_id) if hasattr(game, 'game_id') else {}
+
+    # 扫描近期发言
+    for chat in game.chats[-20:]:
+        content = str(chat.get("content", ""))
+        # 匹配模式：X号可疑 / 怀疑X号 / X是狼 / X号是狼 / 投X号
+        patterns = [
+            r'(\d+)号.*可疑',
+            r'怀疑.*?(\d+)号',
+            r'(\d+)号.*是狼',
+            r'(\d+).*是狼',
+            r'投.*?(\d+)号',
+            r'(\d+)号.*有问题',
+        ]
+        for pattern in patterns:
+            matches = re.findall(pattern, content)
+            for seat_str in matches:
+                seat_num = int(seat_str)
+                suspicious_seat_counts[seat_num] = suspicious_seat_counts.get(seat_num, 0) + 1
+
+    # 按被怀疑次数排序，返回 candidates 中匹配的玩家
+    result = []
+    for seat_num, _count in sorted(suspicious_seat_counts.items(), key=lambda x: -x[1]):
+        matched = [p for p in candidates if p.seat_number == seat_num]
+        result.extend(matched)
+
+    return result
+
+
+def _get_claimed_prophet(game, candidates: list):
+    """从聊天记录中寻找自称预言家的玩家（Bug #14 辅助函数）。
+    搜索"我是预言家"/"我验了X号"等模式，
+    返回 candidates 中自称预言家的玩家。
+    """
+    import re
+    seat_map = get_seat_map(game.game_id) if hasattr(game, 'game_id') else {}
+
+    # 扫描近期发言
+    for chat in game.chats[-20:]:
+        content = str(chat.get("content", ""))
+        # 匹配自称预言家的模式
+        if re.search(r'我是预言家|我验了|我查验了|我的身份是预言家', content):
+            speaker_id = str(chat.get("playerId", ""))
+            # 在 candidates 中查找该发言人
+            claimed = next((p for p in candidates if p.id == speaker_id), None)
+            if claimed:
+                return claimed
+
+    return None
 
 
 def _compute_wolf_kill_target(game) -> str | None:

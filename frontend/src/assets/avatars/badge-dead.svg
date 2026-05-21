@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <!-- 死亡标记：红色X -->
+  <circle cx="12" cy="12" r="10" fill="#EF4444" opacity="0.85"/>
+  <line x1="7.5" y1="7.5" x2="16.5" y2="16.5" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
+  <line x1="16.5" y1="7.5" x2="7.5" y2="16.5" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
+</svg>
