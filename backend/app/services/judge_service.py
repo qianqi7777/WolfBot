@@ -436,6 +436,11 @@ class Judge:
             await self._ask_role(game, role_type)
             await asyncio.sleep(0.5)
 
+        # 首夜额外环节：白痴确认身份 + 猎人确认开枪状态
+        # （网易标准规则：首夜白痴和猎人需睁眼让法官确认身份/状态，非首夜跳过）
+        if game.current_round == 1:
+            await self._first_night_identity_check(game)
+
         # 等待真人玩家提交夜间行动
         await self._announce("请有夜间行动的玩家提交行动")
         night_timeout = self._preset_rules.get("night_action_timeout_seconds", 30)
@@ -509,14 +514,16 @@ class Judge:
             }
             # 女巫：告知刀口
             if role_type == RoleType.witch:
+                is_first_night = game.current_round == 1
+                self_save_hint = "（首夜可自救）" if is_first_night else "（不可自救）"
                 if witch_wolf_target_id:
                     target_player = next((p for p in game.players if p.id == witch_wolf_target_id), None)
                     wolf_victim_label = f"{target_player.seat_number}号({target_player.name})" if target_player else "无人"
                     payload["wolfKillTargetId"] = witch_wolf_target_id
                     payload["wolfKillTargetLabel"] = wolf_victim_label
-                    payload["hint"] = f"狼人今晚袭击了 {wolf_victim_label}，是否使用解药？你也可以使用毒药毒杀任意玩家。"
+                    payload["hint"] = f"狼人今晚袭击了 {wolf_victim_label}，是否使用解药？{self_save_hint}你也可以使用毒药毒杀任意玩家。每晚只能使用一瓶药。"
                 else:
-                    payload["hint"] = "今晚无人被刀，你可以使用毒药毒杀任意玩家（或跳过）。"
+                    payload["hint"] = f"今晚无人被刀，你可以使用毒药毒杀任意玩家（或跳过）。{self_save_hint}"
             # 狼人队友信息：真人狼人能看到同场存活的狼人队友
             if skill.faction == "wolf":
                 teammates = [
@@ -542,6 +549,62 @@ class Judge:
         for tid in wolf_targets:
             tally[tid] = tally.get(tid, 0) + 1
         return max(tally, key=tally.get)
+
+    async def _first_night_identity_check(self, game) -> None:
+        """首夜额外环节：白痴确认身份 + 猎人确认开枪状态。
+        网易标准规则：首夜白痴和猎人需睁眼让法官确认身份/状态，无操作，非首夜跳过。"""
+        # 白痴确认身份
+        idiot_alive = [p for p in game.players if p.is_alive and p.role == RoleType.idiot]
+        if idiot_alive:
+            await self._announce("白痴请睁眼，请确认身份")
+            await asyncio.sleep(2)
+            await self._announce("白痴请闭眼")
+            await asyncio.sleep(0.5)
+        else:
+            # 暗牌场：即使角色不存在也要模拟等待（防止角色推断）
+            from app.domain.roles import get_preset
+            preset_id = game.room_settings.scene.preset
+            try:
+                preset = get_preset(preset_id)
+                is_dark = preset.is_dark
+            except ValueError:
+                is_dark = True
+            if is_dark:
+                await self._announce("白痴请睁眼，请确认身份")
+                await asyncio.sleep(2)
+                await self._announce("白痴请闭眼")
+                await asyncio.sleep(0.5)
+
+        # 猎人确认开枪状态
+        hunter_alive = [p for p in game.players if p.is_alive and p.role == RoleType.hunter]
+        if hunter_alive:
+            hunter = hunter_alive[0]
+            # 猎人首夜一定可以开枪（还没被毒的可能）
+            can_shoot = not getattr(hunter, 'poisoned', False)
+            await self._announce("猎人请睁眼")
+            # 私密告知猎人开枪状态
+            await self._send_to_player(hunter.id, MessageType.night_action, {
+                "actionRequired": False,
+                "role": RoleType.hunter.value,
+                "hint": f"你的开枪状态：{'可以开枪' if can_shoot else '不可开枪'}",
+            })
+            await asyncio.sleep(2)
+            await self._announce("猎人请闭眼")
+            await asyncio.sleep(0.5)
+        else:
+            # 暗牌场模拟
+            from app.domain.roles import get_preset
+            preset_id = game.room_settings.scene.preset
+            try:
+                preset = get_preset(preset_id)
+                is_dark = preset.is_dark
+            except ValueError:
+                is_dark = True
+            if is_dark:
+                await self._announce("猎人请睁眼")
+                await asyncio.sleep(2)
+                await self._announce("猎人请闭眼")
+                await asyncio.sleep(0.5)
 
     async def _announce_night_result(self, night_result: dict[str, Any]) -> bool:
         """处理夜晚结算结果：标记死亡、发送night_result/player_update消息。
@@ -714,15 +777,22 @@ class Judge:
 
         # ── 阶段2：竞选发言（候选人按座位顺序发言） ──
         await self._announce(f"{'、'.join(self._candidate_labels(game))} 上警，开始竞选发言")
+        # 竞选发言顺序：从最后一个上警的玩家开始逆序发言（网易标准规则）
         candidates_sorted = sorted(
             candidates,
             key=lambda cid: next((p.seat_number for p in game.players if p.id == cid), 0),
+            reverse=True,  # 逆序：从最后一个上警的玩家开始
         )
 
         for turn_idx, candidate_id in enumerate(candidates_sorted):
             game = self._game()
             if game.winner_faction is not None:
                 return False
+
+            # 检查竞选阶段狼人自爆
+            if game.wolf_self_destructed:
+                continue_game = await self._handle_wolf_self_destruct(game.wolf_self_destructed)
+                return continue_game
 
             # 检查退选
             if candidate_id not in game.sheriff_candidate_ids:
@@ -748,6 +818,11 @@ class Judge:
             await self._announce(f"轮到 {candidate.seat_number}号({candidate.name}) 竞选发言")
 
             if candidate.is_ai:
+                # AI 竞选发言前：AI 狼人可能在竞选阶段自爆
+                if SKILL_REGISTRY[candidate.role].faction == "wolf" and self._ai_should_self_destruct(candidate):
+                    wolf_self_destruct(self.game_id, candidate.id)
+                    continue_game = await self._handle_wolf_self_destruct(candidate.id)
+                    return continue_game
                 # AI 竞选发言
                 speech = await self._generate_ai_sheriff_speech(candidate)
                 record_speak(self.game_id, candidate.id, speech)
@@ -759,12 +834,16 @@ class Judge:
                 })
                 await asyncio.sleep(0.3)
             else:
-                # 真人竞选发言：等待超时
+                # 真人竞选发言：等待超时，期间检查狼人自爆
                 end_time = asyncio.get_running_loop().time() + speak_timeout
                 while asyncio.get_running_loop().time() < end_time:
                     current_game = self._game()
                     if current_game.sheriff_campaign_submitted:
                         break
+                    # 检查真人狼人在竞选期间自爆
+                    if current_game.wolf_self_destructed:
+                        continue_game = await self._handle_wolf_self_destruct(current_game.wolf_self_destructed)
+                        return continue_game
                     await asyncio.sleep(0.25)
 
             clear_deadline(self.game_id)
@@ -1141,9 +1220,24 @@ class Judge:
             "playerName": name,
         })
 
-        # 自爆狼人发表遗言
-        await self._announce(f"{name} 可以发表遗言")
-        await self._wait_last_words(player_id, name, timeout_seconds=self._preset_rules.get("last_words_timeout_seconds", 30))
+        # 竞选阶段自爆：双爆吞警徽逻辑
+        in_sheriff_election = game.game_status == GameStatus.sheriff_election
+        if in_sheriff_election:
+            game.sheriff_self_destruct_count = getattr(game, 'sheriff_self_destruct_count', 0) + 1
+            if game.sheriff_self_destruct_count >= 2:
+                # 双爆吞警徽：本局无警长
+                await self._announce("两狼连续自爆，警徽永久流失！本局无警长。")
+                game.sheriff_id = None
+                clear_sheriff_election(self.game_id)
+                game.sheriff_self_destruct_count = 0
+            else:
+                # 单爆：终止本轮竞选，但警徽不流失，后续可重新竞选
+                await self._announce("竞选阶段狼人自爆，本轮竞选终止，当日无警长。")
+                clear_sheriff_election(self.game_id)
+        else:
+            # 非竞选阶段自爆：自爆狼人发表遗言
+            await self._announce(f"{name} 可以发表遗言")
+            await self._wait_last_words(player_id, name, timeout_seconds=self._preset_rules.get("last_words_timeout_seconds", 30))
 
         # 警长转让
         if game.sheriff_id == player_id:

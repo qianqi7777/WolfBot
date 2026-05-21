@@ -117,6 +117,7 @@ class GameState:
     sheriff_campaign_submitted: bool = False  # 竞选发言已提交标记
     # 狼人自爆相关
     wolf_self_destructed: str | None = None  # 自爆狼人玩家 ID（None 表示无自爆）
+    sheriff_self_destruct_count: int = 0  # 竞选阶段狼人自爆次数（双爆吞警徽）
     # 猎人开枪相关
     pending_hunter_shoot: str | None = None  # 待开枪的猎人玩家 ID
     hunter_killed_by_poison: bool = False  # 猎人是否被毒杀（毒杀不能开枪）
@@ -739,8 +740,12 @@ def record_night_action(game_id: str, player_id: str, target_id: str, action_typ
     if target is None or not target.is_alive:
         raise AppError("目标不存在或已死亡", status_code=404)
 
-    if target_id == player_id and not SKILL_REGISTRY[player.role].can_target_self:
-        raise AppError("不能对自己执行夜间行动", status_code=409)
+    if target_id == player_id:
+        skill = SKILL_REGISTRY[player.role]
+        is_first_night = game.current_round == 1
+        # 首夜允许自救（女巫首夜自救规则）
+        if not skill.can_target_self and not (skill.can_target_self_first_night and is_first_night):
+            raise AppError("不能对自己执行夜间行动", status_code=409)
 
     if not SKILL_REGISTRY[player.role].consecutive_target_allowed and player.last_guard_target_id == target_id:
         raise AppError(f"{SKILL_REGISTRY[player.role].name}不能连续两晚选择同一目标", status_code=409)
@@ -768,11 +773,15 @@ def record_night_action(game_id: str, player_id: str, target_id: str, action_typ
 
 
 def get_night_targets(game_id: str, player_id: str) -> list[Player]:
-    """Return alive targets for night action. Includes self if can_target_self."""
+    """Return alive targets for night action. Includes self if can_target_self or can_target_self_first_night (首夜)."""
     game = _get_game_or_raise(game_id)
     player = next((p for p in game.players if p.id == player_id), None)
-    if player and SKILL_REGISTRY[player.role].can_target_self:
-        return [p for p in game.players if p.is_alive]
+    if player:
+        skill = SKILL_REGISTRY[player.role]
+        is_first_night = game.current_round == 1
+        can_include_self = skill.can_target_self or (skill.can_target_self_first_night and is_first_night)
+        if can_include_self:
+            return [p for p in game.players if p.is_alive]
     return [p for p in game.players if p.is_alive and p.id != player_id]
 
 
@@ -1338,11 +1347,12 @@ def clear_sheriff_election(game_id: str) -> None:
 # ------------------------------------------------------------------
 
 def wolf_self_destruct(game_id: str, player_id: str) -> dict[str, object]:
-    """狼人自爆：狼人在白天发言/投票阶段选择自爆，立即死亡并跳过当天剩余流程。
-    返回 {player_id, player_name, winner_faction}。"""
+    """狼人自爆：狼人在白天发言/投票/竞选阶段选择自爆，立即死亡并跳过当天剩余流程。
+    竞选阶段狼人自爆可影响警徽归属（双爆吞警徽）。
+    返回 {player_id, player_name, winner_faction, in_sheriff_election}。"""
     game = _get_game_or_raise(game_id)
-    if game.game_status not in (GameStatus.speak, GameStatus.vote):
-        raise AppError("当前阶段不能自爆（仅发言/投票阶段可用）", status_code=409)
+    if game.game_status not in (GameStatus.speak, GameStatus.vote, GameStatus.sheriff_election):
+        raise AppError("当前阶段不能自爆（仅发言/投票/竞选阶段可用）", status_code=409)
     player = next((p for p in game.players if p.id == player_id), None)
     if player is None:
         raise AppError("玩家不存在", status_code=404)
@@ -1374,6 +1384,7 @@ def wolf_self_destruct(game_id: str, player_id: str) -> dict[str, object]:
         "player_id": player_id,
         "player_name": seat_label(player),
         "winner_faction": game.winner_faction,
+        "in_sheriff_election": game.game_status == GameStatus.sheriff_election,
     }
 
 

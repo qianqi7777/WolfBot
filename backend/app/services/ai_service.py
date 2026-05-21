@@ -431,23 +431,33 @@ def _compute_wolf_kill_target(game) -> str | None:
 
 def _ai_witch_night_action(game, player, wolf_kill_target_id: str | None = None) -> tuple[str, str]:
     """AI 女巫夜间行动决策：
-    - 解药：只能救狼人刀口目标（wolf_kill_target_id），70%概率救人
-    - 毒药：随机毒杀任意存活玩家，50%概率使用
+    - 解药：优先考虑救人（首夜可自救），70%概率救人
+    - 毒药：非首夜或有明确目标时，40%概率使用
+    - 每晚只能使用一瓶药
     """
+    is_first_night = game.current_round == 1
     alive_others = [p for p in game.players if p.is_alive and p.id != player.id]
 
-    # 毒药未使用：毒杀疑似狼人
-    if not player.poison_used and alive_others:
-        target = random.choice(alive_others)
-        if random.random() < 0.5:
-            return target.id, "poison"
-
-    # 解药未使用：救狼人刀口
+    # 解药未使用：优先救狼人刀口（救人优先于毒人）
     if not player.antidote_used and wolf_kill_target_id:
         target_player = next((p for p in game.players if p.id == wolf_kill_target_id), None)
         if target_player and target_player.is_alive:
-            if random.random() < 0.7:
-                return wolf_kill_target_id, "save"
+            # 首夜被刀的是自己：自救概率80%
+            if wolf_kill_target_id == player.id:
+                if is_first_night and random.random() < 0.8:
+                    return wolf_kill_target_id, "save"
+            else:
+                # 非自救：70%概率救人
+                if random.random() < 0.7:
+                    return wolf_kill_target_id, "save"
+
+    # 毒药未使用：毒杀疑似狼人（概率较低，谨慎使用）
+    if not player.poison_used and alive_others:
+        # 非首夜更有可能用毒（首夜信息不足，不轻易用毒）
+        poison_prob = 0.3 if not is_first_night else 0.1
+        target = random.choice(alive_others)
+        if random.random() < poison_prob:
+            return target.id, "poison"
 
     return "", ""
 

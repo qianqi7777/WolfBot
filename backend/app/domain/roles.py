@@ -52,6 +52,7 @@ class RoleSkill:
     human_hint: str                       # 真人夜间行动提示
     mock_speeches: list[str]             # mock 发言模板
     can_target_self: bool = False        # 夜间能否选自己
+    can_target_self_first_night: bool = False  # 首夜能否选自己（女巫首夜可自救）
     consecutive_target_allowed: bool = True  # 能否连续选同一目标（守卫=否）
     win_faction_label: str = ""          # 胜利时显示的阵营名
 
@@ -94,7 +95,7 @@ WOLF_SKILL = RoleSkill(
     faction="wolf",
     has_night_action=True,
     night_action_type="kill",
-    ai_hint="你是狼人阵营。你的目标是伪装成好人，引导投票方向，夜间与同伴协商击杀目标。",
+    ai_hint="你是狼人阵营。你的目标是伪装成好人，引导投票方向，夜间与同伴协商击杀目标。在极端劣势时可以考虑自爆（白天发言/投票/竞选阶段），打断好人节奏。竞选阶段双爆可吞警徽。",
     human_hint="你是狼人，请选择今晚要袭击的目标",
     mock_speeches=[
         "我觉得大家先冷静分析一下，不要急着站队。",
@@ -164,8 +165,8 @@ HUNTER_SKILL = RoleSkill(
     faction="civilian",
     has_night_action=False,
     night_action_type="",
-    ai_hint="你是猎人（好人阵营）。你被投票出局或被狼人杀害时可以开枪带走一人，注意不要误伤好人。",
-    human_hint="",
+    ai_hint="你是猎人（好人阵营）。你被投票出局或被狼人杀害时可以开枪带走一人，注意不要误伤好人。注意：被女巫毒杀时无法开枪。首夜法官会告知你开枪状态。",
+    human_hint="你是猎人，被投票放逐或被狼人杀害时可以开枪带走一人（被毒杀时不能开枪）",
     mock_speeches=[
         "我觉得大家不要太冲动，让我先把情况理清楚。",
         "我手上没什么特别的信息，但我在认真听大家发言。",
@@ -181,14 +182,16 @@ WITCH_SKILL = RoleSkill(
     faction="civilian",
     has_night_action=True,
     night_action_type="witch",
-    ai_hint="你是女巫（好人阵营）。你有一瓶解药和一瓶毒药，各只能使用一次，谨慎使用。",
-    human_hint="你是女巫，是否使用解药救人或毒药杀人",
+    ai_hint="你是女巫（好人阵营）。你有一瓶解药和一瓶毒药，各只能使用一次，每晚只能使用一瓶。首夜可以自救，之后不能自救。谨慎使用毒药，避免毒到好人。",
+    human_hint="你是女巫，是否使用解药救人或毒药杀人（首夜可自救，之后不可自救）",
     mock_speeches=[
         "我手上有些信息需要确认，先不急着表态。",
         "大家发言要负责任，有些话说了就收不回来。",
         "我在仔细听，有些发言让我有了一些想法。",
         "我暂时选择保守，先观察一轮。",
     ],
+    can_target_self=False,
+    can_target_self_first_night=True,   # 首夜可以对自己使用解药
 )
 
 IDIOT_SKILL = RoleSkill(
@@ -242,8 +245,9 @@ def get_skill(role: RoleType) -> RoleSkill:
 
 def get_night_action_roles() -> list[RoleType]:
     """获取所有有夜间行动的角色（按行动顺序排列）"""
-    # 标准夜间行动顺序：狼人 → 预言家 → 女巫 → 守卫
-    order = [RoleType.wolf, RoleType.prophet, RoleType.witch, RoleType.guard]
+    # 标准夜间行动顺序：狼人 → 女巫 → 预言家 → 守卫
+    # （网易标准规则：女巫在预言家之前行动，先获知刀口）
+    order = [RoleType.wolf, RoleType.witch, RoleType.prophet, RoleType.guard]
     return [r for r in order if r in SKILL_REGISTRY and SKILL_REGISTRY[r].has_night_action]
 
 
@@ -336,7 +340,7 @@ SCENE_PRESETS: dict[str, ScenePreset] = {
     "twelve-player-standard-dark": ScenePreset(
         preset_id="twelve-player-standard-dark",
         name="12人标准暗牌场（预女猎白）",
-        description="4狼8好人，神职为预言家、女巫、猎人、白痴，暗牌局，屠边规则。",
+        description="4狼8好人，神职为预言家、女巫、猎人、白痴，暗牌局，有警长，屠边规则。",
         player_count=12,
         role_distribution={
             RoleType.wolf: 4,
@@ -347,7 +351,7 @@ SCENE_PRESETS: dict[str, ScenePreset] = {
             RoleType.civilian: 4,
         },
         is_dark=True,
-        has_sheriff=False,
+        has_sheriff=True,
         rules={
             "win_condition": "slaughter_edge",
             "speak_order": "by_seat",
