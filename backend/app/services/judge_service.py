@@ -487,21 +487,36 @@ class Judge:
                 await asyncio.sleep(1.0)
             return
 
+        # ── 女巫特殊处理：先计算狼人刀口 ──
+        witch_wolf_target_id: str | None = None
+        if role_type == RoleType.witch:
+            witch_wolf_target_id = self._compute_wolf_kill_target(game)
+
         # AI 玩家自动行动
         ai_players = [p for p in alive_players if p.is_ai]
         for ai_p in ai_players:
             target, action_type = await _generate_ai_night_action(self.game_id, ai_p.id)
             if target:
-                record_night_action(self.game_id, ai_p.id, target, action_type or "")
+                record_night_action(self.game_id, ai_p.id, target, action_type or "", witch_wolf_target_id)
 
         # 通知真人玩家提交行动
         human_players = [p for p in alive_players if not p.is_ai]
         for human_p in human_players:
-            payload = {
+            payload: dict[str, Any] = {
                 "actionRequired": True,
                 "role": role_type.value,
                 "hint": skill.human_hint,
             }
+            # 女巫：告知刀口
+            if role_type == RoleType.witch:
+                if witch_wolf_target_id:
+                    target_player = next((p for p in game.players if p.id == witch_wolf_target_id), None)
+                    wolf_victim_label = f"{target_player.seat_number}号({target_player.name})" if target_player else "无人"
+                    payload["wolfKillTargetId"] = witch_wolf_target_id
+                    payload["wolfKillTargetLabel"] = wolf_victim_label
+                    payload["hint"] = f"狼人今晚袭击了 {wolf_victim_label}，是否使用解药？你也可以使用毒药毒杀任意玩家。"
+                else:
+                    payload["hint"] = "今晚无人被刀，你可以使用毒药毒杀任意玩家（或跳过）。"
             # 狼人队友信息：真人狼人能看到同场存活的狼人队友
             if skill.faction == "wolf":
                 teammates = [
@@ -514,6 +529,19 @@ class Judge:
                     payload["teammates"] = teammates
                     payload["hint"] += f"\n你的狼人队友：{'、'.join(teammates)}"
             await self._send_to_player(human_p.id, MessageType.night_action, payload)
+
+    def _compute_wolf_kill_target(self, game) -> str | None:
+        """从已提交的狼人行动中统计刀口（多数票）。"""
+        wolf_targets: list[str] = []
+        for action in game.night_actions:
+            if str(action.get("role", "")) == RoleType.wolf.value:
+                wolf_targets.append(str(action.get("targetId", "")))
+        if not wolf_targets:
+            return None
+        tally: dict[str, int] = {}
+        for tid in wolf_targets:
+            tally[tid] = tally.get(tid, 0) + 1
+        return max(tally, key=tally.get)
 
     async def _announce_night_result(self, night_result: dict[str, Any]) -> bool:
         """处理夜晚结算结果：标记死亡、发送night_result/player_update消息。
@@ -1162,7 +1190,7 @@ class Judge:
     # ------------------------------------------------------------------
 
     async def day_phase(self) -> bool:
-        """执行白天阶段（公告 → 遗言 → 警长竞选(首日) → 发言 → 投票）。返回 True 继续，False 结束。"""
+        """执行白天阶段（警长竞选(首日) → 公告死讯 → 遗言 → 发言 → 投票）。返回 True 继续，False 结束。"""
         game = self._game()
 
         # 天亮公告
@@ -1173,9 +1201,23 @@ class Judge:
         })
         await self._announce("天亮了")
 
-        # ── 汇总昨晚死亡/平安夜公告 ──
-        # 暗牌场：平安夜不显示原因（防止推断身份）
+        # ── 警长死亡处理：如果警长在夜间被杀，转让徽章 ──
         night_result_data = getattr(self, '_last_night_result', None)
+        if night_result_data:
+            all_killed = night_result_data.get("all_killed_ids", [])
+            if game.sheriff_id and game.sheriff_id in all_killed:
+                await self._handle_sheriff_death(game.sheriff_id)
+
+        # ── 警长竞选（仅第一轮白天，在公布死讯之前） ──
+        if game.current_round == 1 and game.sheriff_id is None:
+            continue_game = await self.sheriff_election_phase()
+            if not continue_game:
+                return False
+
+        await asyncio.sleep(0.5)
+
+        # ── 汇总昨晚死亡/平安夜公告（警长竞选结束之后公布） ──
+        # 暗牌场：平安夜不显示原因（防止推断身份）
         if night_result_data:
             all_killed = night_result_data.get("all_killed_ids", [])
             if all_killed:
@@ -1197,18 +1239,6 @@ class Judge:
                 await self._announce(msg)
 
         await asyncio.sleep(1.5)
-
-        # ── 警长死亡处理：如果警长在夜间被杀，转让徽章 ──
-        if night_result_data:
-            killed_id = night_result_data.get("killed_player_id")
-            if killed_id and game.sheriff_id == killed_id:
-                await self._handle_sheriff_death(killed_id)
-
-        # ── 警长竞选（仅第一轮白天） ──
-        if game.current_round == 1 and game.sheriff_id is None:
-            continue_game = await self.sheriff_election_phase()
-            if not continue_game:
-                return False
 
         # 发言阶段
         continue_game = await self.speak_phase()

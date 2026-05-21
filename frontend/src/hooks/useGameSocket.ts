@@ -332,6 +332,12 @@ export function useGameSocket() {
         if (isRecord(message.payload) && Array.isArray(message.payload.teammates)) {
           store.setWolfTeammates(message.payload.teammates.filter((t: unknown) => typeof t === 'string'));
         }
+        // 女巫刀口信息
+        if (isRecord(message.payload)) {
+          const wolfTargetId = typeof message.payload.wolfKillTargetId === 'string' ? message.payload.wolfKillTargetId : null;
+          const wolfTargetLabel = typeof message.payload.wolfKillTargetLabel === 'string' ? message.payload.wolfKillTargetLabel : null;
+          store.setWolfKillTarget(wolfTargetId, wolfTargetLabel);
+        }
         // 提取 deadline
         if (isRecord(message.payload) && typeof message.payload.deadline === 'string') {
           store.setDeadline(message.payload.deadline);

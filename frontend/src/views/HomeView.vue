@@ -39,6 +39,7 @@ const playerName = ref('玩家');
 const loading = ref(false);
 
 const enterRoom = async (snapshot: Awaited<ReturnType<typeof createGame>>) => {
+  store.resetGame();  // 清掉上一局的残留状态
   store.applySnapshot(snapshot);
   await router.push({ name: 'room', params: { gameId: snapshot.gameId } });
 };

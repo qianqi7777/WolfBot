@@ -393,9 +393,10 @@ async def _generate_ai_night_action(game_id: str, player_id: str) -> tuple[str, 
     if not skill.has_night_action:
         return "", ""
 
-    # 女巫特殊处理：选择使用解药或毒药
+    # 女巫特殊处理：需要知道狼人刀口
     if player.role == RoleType.witch:
-        return _ai_witch_night_action(game, player)
+        wolf_kill_target_id = _compute_wolf_kill_target(game)
+        return _ai_witch_night_action(game, player, wolf_kill_target_id)
 
     # 构建目标列表
     if skill.faction == "wolf":
@@ -414,29 +415,40 @@ async def _generate_ai_night_action(game_id: str, player_id: str) -> tuple[str, 
     return random.choice(targets).id, ""
 
 
-def _ai_witch_night_action(game, player) -> tuple[str, str]:
-    """AI 女巫夜间行动决策：优先用毒药杀狼人，解药救好人。"""
+def _compute_wolf_kill_target(game) -> str | None:
+    """从已提交的狼人行动中统计刀口（多数票）。"""
+    wolf_targets: list[str] = []
+    for action in game.night_actions:
+        if str(action.get("role", "")) == RoleType.wolf.value:
+            wolf_targets.append(str(action.get("targetId", "")))
+    if not wolf_targets:
+        return None
+    tally: dict[str, int] = {}
+    for tid in wolf_targets:
+        tally[tid] = tally.get(tid, 0) + 1
+    return max(tally, key=tally.get)
+
+
+def _ai_witch_night_action(game, player, wolf_kill_target_id: str | None = None) -> tuple[str, str]:
+    """AI 女巫夜间行动决策：
+    - 解药：只能救狼人刀口目标（wolf_kill_target_id），70%概率救人
+    - 毒药：随机毒杀任意存活玩家，50%概率使用
+    """
     alive_others = [p for p in game.players if p.is_alive and p.id != player.id]
 
-    # 毒药未使用：毒杀疑似狼人（优先非平民）
-    if not player.poison_used:
-        # 优先毒杀已知狼人（根据之前的查验信息等，但AI没有记忆；简化为随机选择）
-        # 策略：随机选择一个非自己的存活玩家
-        if alive_others:
-            target = random.choice(alive_others)
-            # 有一定概率选择使用毒药
-            if random.random() < 0.5:  # 50%概率使用毒药
-                return target.id, "poison"
+    # 毒药未使用：毒杀疑似狼人
+    if not player.poison_used and alive_others:
+        target = random.choice(alive_others)
+        if random.random() < 0.5:
+            return target.id, "poison"
 
-    # 解药未使用：救活一个随机的存活玩家（通常是好人）
-    if not player.antidote_used:
-        if alive_others:
-            # 救一个非狼人阵营的玩家（AI女巫不知道谁被杀了，简化处理）
-            target = random.choice(alive_others)
-            if random.random() < 0.7:  # 70%概率使用解药
-                return target.id, "save"
+    # 解药未使用：救狼人刀口
+    if not player.antidote_used and wolf_kill_target_id:
+        target_player = next((p for p in game.players if p.id == wolf_kill_target_id), None)
+        if target_player and target_player.is_alive:
+            if random.random() < 0.7:
+                return wolf_kill_target_id, "save"
 
-    # 都不使用或无法使用
     return "", ""
 
 

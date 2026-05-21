@@ -302,7 +302,8 @@ def advance_speak_turn(game_id: str) -> str | None:
 
 
 def _assign_roles(players: Iterable[Player], preset: str = "six-player-dark") -> None:
-    """根据场景预设分配角色。使用角色技能注册表的 build_role_list。"""
+    """根据场景预设分配角色。使用角色技能注册表的 build_role_list。
+    确保角色数量与玩家数精确匹配。"""
     player_list = list(players)
     total = len(player_list)
 
@@ -310,25 +311,41 @@ def _assign_roles(players: Iterable[Player], preset: str = "six-player-dark") ->
     try:
         roles = build_role_list(preset)
     except ValueError:
-        # 未知预设时使用动态公式
-        n_wolves = max(1, total // 4)
-        n_prophets = 1 if total >= 4 else 0
-        n_guards = 1 if total >= 6 else 0
-        roles = []
-        roles.extend([RoleType.wolf] * n_wolves)
-        roles.extend([RoleType.prophet] * n_prophets)
-        roles.extend([RoleType.guard] * n_guards)
-        roles.extend([RoleType.civilian] * (total - n_wolves - n_prophets - n_guards))
+        # 未知预设时使用动态公式（包含主流神职）
+        n_wolves = max(1, total // 3)  # 约 1/3 是狼人
+        remaining = total - n_wolves
+        # 至少分配预言家
+        roles: list[RoleType] = [RoleType.wolf] * n_wolves
+        if remaining >= 1:
+            roles.append(RoleType.prophet)
+            remaining -= 1
+        if remaining >= 1 and total >= 6:
+            roles.append(RoleType.guard)
+            remaining -= 1
+        if remaining >= 1 and total >= 9:
+            roles.append(RoleType.hunter)
+            remaining -= 1
+        if remaining >= 1 and total >= 12:
+            roles.append(RoleType.witch)
+            remaining -= 1
+        if remaining >= 1 and total >= 12:
+            roles.append(RoleType.idiot)
+            remaining -= 1
+        # 剩余的填平民
+        roles.extend([RoleType.civilian] * max(0, remaining))
         random.shuffle(roles)
 
-    # 确保角色数与玩家数匹配
+    # 确保角色数与玩家数精确匹配
     if len(roles) != total:
-        # 动态调整：多余则截断，不足则补平民
         if len(roles) > total:
-            roles = roles[:total]
+            # 多余则截断，优先保留狼人
+            wolves = [r for r in roles if r == RoleType.wolf]
+            others = [r for r in roles if r != RoleType.wolf]
+            random.shuffle(others)
+            roles = wolves[:total] if len(wolves) >= total else wolves + others[:total - len(wolves)]
         else:
             roles.extend([RoleType.civilian] * (total - len(roles)))
-            random.shuffle(roles)
+        random.shuffle(roles)
 
     for index, player in enumerate(player_list):
         player.role = roles[index]
@@ -702,9 +719,10 @@ def record_vote(game_id: str, voter_id: str, target_id: str) -> None:
     game.announcements.append("收到一票" if not is_abstain else "收到一票弃票")
 
 
-def record_night_action(game_id: str, player_id: str, target_id: str, action_type: str = "") -> None:
+def record_night_action(game_id: str, player_id: str, target_id: str, action_type: str = "", wolf_kill_target_id: str | None = None) -> None:
     """Record a night action for a player.
     action_type: optional, used for witch (\"save\"/\"poison\") to distinguish potion type.
+    wolf_kill_target_id: the computed wolf kill target (used to validate witch save target).
     """
     game = _get_game_or_raise(game_id)
     if game.game_status != GameStatus.night:
@@ -727,14 +745,17 @@ def record_night_action(game_id: str, player_id: str, target_id: str, action_typ
     if not SKILL_REGISTRY[player.role].consecutive_target_allowed and player.last_guard_target_id == target_id:
         raise AppError(f"{SKILL_REGISTRY[player.role].name}不能连续两晚选择同一目标", status_code=409)
 
-    # 女巫特殊校验：药剂各只能用一次
+    # 女巫特殊校验：药剂各只能用一次；解药只能救刀口
     if player.role == RoleType.witch:
         if action_type == "save" and player.antidote_used:
             raise AppError("解药已经使用过", status_code=409)
         if action_type == "poison" and player.poison_used:
             raise AppError("毒药已经使用过", status_code=409)
-        if action_type not in ("save", "poison"):
-            raise AppError("女巫必须选择使用解药(save)或毒药(poison)", status_code=400)
+        if action_type == "save":
+            if wolf_kill_target_id and target_id != wolf_kill_target_id:
+                raise AppError(f"解药只能解救被狼人袭击的玩家", status_code=409)
+        if action_type not in ("save", "poison", ""):
+            raise AppError("女巫必须选择使用解药(save)或毒药(poison)或跳过", status_code=400)
 
     game.night_actions = [action for action in game.night_actions if action.get("playerId") != player_id]
     game.night_actions.append({
@@ -795,21 +816,28 @@ def resolve_night(game_id: str) -> dict[str, object]:
         killed_player_id = None
 
     # --- Witch antidote: save the killed player ---
+    # 奶穿规则：如果守卫和女巫同时保护同一目标，该目标死亡（守护+解药互相抵消）
     witch_saved = False
     witch_saved_player_id: str | None = None
+    double_protected_death = False
     if killed_player_id and witch_save_targets:
-        # 女巫解药可以救活被狼杀的玩家
         for save_target in witch_save_targets:
             if save_target == killed_player_id:
-                witch_saved = True
-                witch_saved_player_id = killed_player_id
-                killed_player_id = None
-                # 标记女巫解药已使用
+                # 标记女巫解药已使用（无论是否成功都要消耗解药）
                 for action in game.night_actions:
                     if str(action.get("role", "")) == RoleType.witch.value and str(action.get("actionType", "")) == "save":
                         witch_player = next((p for p in game.players if p.id == str(action.get("playerId", ""))), None)
                         if witch_player:
                             witch_player.antidote_used = True
+                # 奶穿检查：守卫守了同一个人 → 死亡
+                if guarded_player_id and killed_player_id == guarded_player_id:
+                    double_protected_death = True
+                    witch_saved = False
+                    game.announcements.append("守卫和女巫同时保护同一目标，发生奶穿")
+                else:
+                    witch_saved = True
+                    witch_saved_player_id = killed_player_id
+                    killed_player_id = None
                 break
 
     # --- Witch poison: kill the poisoned target (毒药不受守卫保护) ---
@@ -976,6 +1004,7 @@ def resolve_night(game_id: str) -> dict[str, object]:
         "witch_saved_player_id": witch_saved_player_id,
         "witch_poisoned_player_id": witch_poisoned_player_id,
         "all_killed_ids": list(all_killed_ids),
+        "double_protected_death": double_protected_death,
     }
 
 

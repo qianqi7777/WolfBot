@@ -91,46 +91,71 @@
         </div>
       </template>
 
-      <!-- 女巫：选择药剂类型和目标 -->
+      <!-- 女巫：看到刀口，选择是否救 + 选毒杀目标 -->
       <template v-else-if="role === 'witch'">
-        <p>请选择使用的药剂：</p>
-        <div class="potion-select">
-          <el-radio-group v-model="potionType" :disabled="disabled" size="large">
-            <el-radio-button
-              value="save"
-              :disabled="antidoteUsed"
-            >
-              💚 解药（救人）
-              <span v-if="antidoteUsed" class="used-label">已使用</span>
-            </el-radio-button>
-            <el-radio-button
-              value="poison"
-              :disabled="poisonUsed"
-            >
-              💀 毒药（杀人）
-              <span v-if="poisonUsed" class="used-label">已使用</span>
-            </el-radio-button>
-          </el-radio-group>
+        <!-- 解药：显示刀口，选择救/不救 -->
+        <div v-if="!antidoteUsed" class="witch-save-section">
+          <el-alert
+            :title="wolfKillInfo"
+            type="warning"
+            show-icon
+            :closable="false"
+            style="margin-bottom: 12px"
+          />
+          <p>是否使用解药？</p>
+          <div class="potion-select">
+            <el-radio-group v-model="potionType" :disabled="disabled" size="large">
+              <el-radio-button value="save">
+                💚 使用解药（救活{{ wolfKillLabel }}）
+              </el-radio-button>
+              <el-radio-button value="skip">
+                ⏭️ 不使用解药
+              </el-radio-button>
+            </el-radio-group>
+          </div>
         </div>
-        <p v-if="potionType === 'save'" class="hint-text">选择要解救的玩家（如果该玩家被狼人袭击，将存活）</p>
-        <p v-if="potionType === 'poison'" class="hint-text">选择要毒杀的玩家（该玩家将在天亮时死亡）</p>
-        <el-radio-group v-model="selectedTarget" :disabled="disabled || !potionType">
-          <el-radio
-            v-for="player in targetPlayers"
-            :key="player.id"
-            :value="player.id"
+        <div v-else class="witch-save-section">
+          <el-alert title="解药已使用" type="info" show-icon :closable="false" class="used-alert" />
+        </div>
+        <!-- 毒药：选择毒杀目标 -->
+        <div v-if="!poisonUsed" class="witch-poison-section">
+          <el-divider />
+          <p>毒药：选择要毒杀的玩家</p>
+          <el-radio-group v-model="selectedTarget" :disabled="disabled">
+            <el-radio
+              v-for="player in targetPlayers"
+              :key="player.id"
+              :value="player.id"
+            >
+              {{ player.seatNumber }}号({{ player.name }})
+            </el-radio>
+          </el-radio-group>
+          <el-button
+            v-if="!poisonSubmitted"
+            type="danger"
+            :disabled="disabled || !selectedTarget"
+            style="margin-top: 8px"
+            size="small"
+            @click="handlePoisonSubmit"
           >
-            {{ player.seatNumber }}号({{ player.name }})
-          </el-radio>
-        </el-radio-group>
+            确认毒杀
+          </el-button>
+          <el-tag v-else type="danger" size="small" style="margin-top: 8px">毒杀已提交</el-tag>
+        </div>
+        <div v-else class="witch-poison-section">
+          <el-alert title="毒药已使用" type="info" show-icon :closable="false" class="used-alert" />
+        </div>
+        <!-- 确认解药/跳过 -->
         <el-button
+          v-if="potionType && potionType !== 'poison' && !saveSubmitted"
           type="warning"
-          :disabled="disabled || !selectedTarget || !potionType"
+          :disabled="disabled"
           style="margin-top: 12px"
-          @click="handleSubmit"
+          @click="handleSaveSubmit"
         >
-          确认使用{{ potionType === 'save' ? '解药' : '毒药' }}
+          {{ potionType === 'save' ? '确认使用解药' : '确认跳过' }}
         </el-button>
+        <el-tag v-if="saveSubmitted" type="success" size="small" style="margin-top: 12px">解药操作已提交</el-tag>
       </template>
 
       <!-- 无夜间行动的角色（平民、猎人、白痴等）：等待 -->
@@ -160,6 +185,8 @@ const props = defineProps<{
   wolfTargetUpdates?: WolfTargetUpdate[];
   antidoteUsed?: boolean;
   poisonUsed?: boolean;
+  wolfKillTargetId?: string | null;
+  wolfKillTargetLabel?: string;
 }>();
 
 const emit = defineEmits<{
@@ -182,7 +209,15 @@ const antidoteUsed = computed(() => props.antidoteUsed ?? false);
 /** 女巫毒药已使用 */
 const poisonUsed = computed(() => props.poisonUsed ?? false);
 
-/** 目标玩家：仅存活的玩家，狼人和女巫毒药可以选自己 */
+/** 狼人刀口信息 */
+const wolfKillLabel = computed(() => props.wolfKillTargetLabel || '未知');
+const wolfKillInfo = computed(() =>
+  props.wolfKillTargetId
+    ? `⚠️ 狼人今晚袭击了 ${wolfKillLabel.value}`
+    : '今晚无人被刀',
+);
+
+/** 目标玩家：仅存活的玩家，狼人和女巫毒药可以选自己（毒药不限制自毒，由后端校验） */
 const targetPlayers = computed(() => {
   const canTargetSelf = props.role === 'wolf';
   return props.players.filter(
@@ -190,7 +225,28 @@ const targetPlayers = computed(() => {
   );
 });
 
-/** 查验结果显示（暂从 announce 获取，Phase 2 重构） */
+const saveSubmitted = ref(false);
+const poisonSubmitted = ref(false);
+
+const handleSaveSubmit = () => {
+  if (potionType.value === 'save' && props.wolfKillTargetId) {
+    emit('submit', props.wolfKillTargetId, 'save');
+    saveSubmitted.value = true;
+  } else if (potionType.value === 'skip') {
+    // 跳过解药：提交一个空操作
+    emit('submit', '', '');
+    saveSubmitted.value = true;
+  }
+};
+
+const handlePoisonSubmit = () => {
+  if (selectedTarget.value) {
+    emit('submit', selectedTarget.value, 'poison');
+    poisonSubmitted.value = true;
+  }
+};
+
+/** 查验结果显示（暂从 announce 获取） */
 const checkResult = computed(() => {
   // TODO: Phase 2 从私发 announce 解析查验结果
   return null;
@@ -201,14 +257,6 @@ const guardResult = computed(() => {
   const target = props.players.find((p) => p.id === props.nightResult!.guardedPlayerId);
   return target ? { seatLabel: `${target.seatNumber}号`, guardBlocked: props.nightResult.guardBlocked ?? false } : null;
 });
-
-const handleSubmit = () => {
-  if (selectedTarget.value) {
-    emit('submit', selectedTarget.value, potionType.value || undefined);
-    selectedTarget.value = '';
-    potionType.value = '';
-  }
-};
 </script>
 
 <style scoped>

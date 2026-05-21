@@ -64,6 +64,9 @@ export interface GameState {
   sheriffTransfer: SheriffTransferPayload | null;
   // 狼人自爆相关
   wolfSelfDestructed: WolfSelfDestructPayload | null;
+  // 女巫刀口信息
+  wolfKillTargetId: string | null;
+  wolfKillTargetLabel: string | null;
 }
 
 const SESSION_GAME_ID_KEY = 'wolfbot.gameId';
@@ -186,6 +189,8 @@ export const useGameStore = defineStore('game', {
     sheriffElectResult: null,
     sheriffTransfer: null,
     wolfSelfDestructed: null,
+    wolfKillTargetId: null,
+    wolfKillTargetLabel: null,
   }),
   getters: {
     alivePlayers: (state) => state.players.filter((player) => player.isAlive),
@@ -221,6 +226,29 @@ export const useGameStore = defineStore('game', {
       }
       if (Array.isArray(snapshot.sheriffCandidateIds)) {
         this.sheriffCandidateIds = snapshot.sheriffCandidateIds as string[];
+      }
+      // 如果是从 waiting 状态回来（新房间），清理上一局的游戏内数据
+      if (snapshot.gameStatus === 'waiting') {
+        this.chatList = [];
+        this.voteList = [];
+        this.voteSummary = null;
+        this.announceList = [];
+        this.result = null;
+        this.nightResult = null;
+        this.wolfTeammates = [];
+        this.wolfTargetUpdates = [];
+        this.roleSelectStart = null;
+        this.mySelectedRole = null;
+        this.isLastWords = false;
+        this.sheriffElectStart = null;
+        this.sheriffSpeechTurn = null;
+        this.sheriffVoteStart = null;
+        this.sheriffElectResult = null;
+        this.sheriffTransfer = null;
+        this.wolfSelfDestructed = null;
+        this.wolfKillTargetId = null;
+        this.wolfKillTargetLabel = null;
+        this.deadline = null;
       }
       saveSession(this.gameId, this.myId);
     },
@@ -348,6 +376,10 @@ export const useGameStore = defineStore('game', {
     },
     clearWolfSelfDestructed() {
       this.wolfSelfDestructed = null;
+    },
+    setWolfKillTarget(targetId: string | null, label: string | null) {
+      this.wolfKillTargetId = targetId;
+      this.wolfKillTargetLabel = label;
     },
     addAnnounce(content: string) {
       this.announceList.push({

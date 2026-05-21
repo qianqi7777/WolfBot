@@ -90,6 +90,8 @@
         :wolf-target-updates="store.wolfTargetUpdates"
         :antidote-used="selfPlayer?.antidoteUsed"
         :poison-used="selfPlayer?.poisonUsed"
+        :wolf-kill-target-id="store.wolfKillTargetId"
+        :wolf-kill-target-label="store.wolfKillTargetLabel"
         @submit="submitNightActionHandler"
       />
       <!-- 预言家查验结果独立展示（NightAction提交后组件卸载，结果在此持续显示） -->
