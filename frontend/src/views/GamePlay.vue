@@ -4,6 +4,12 @@
     class="game-play-shell"
     :data-theme="isNight ? 'dark' : 'light'"
   >
+    <!-- 沉浸式背景层 -->
+    <div class="immersive-bg" :class="{ 'is-night': isNight }">
+      <div class="stars"></div>
+      <div class="moon-or-sun"></div>
+    </div>
+
     <!-- 顶栏：GameStatus + CountdownTimer -->
     <div class="game-top-bar">
       <GameStatus :status="store.gameStatus" :round="store.currentRound" />
@@ -20,6 +26,9 @@
         :players="store.players"
         :current-speaker-id="store.currentSpeakerId"
         :my-id="store.myId"
+        :wolf-teammates="store.wolfTeammates"
+        :wolf-target-updates="store.wolfTargetUpdates"
+        @seat-click="handleSeatClick"
       >
         <!-- 中央浮动内容 -->
         <div class="center-content">
@@ -41,13 +50,15 @@
     <!-- 底部操作栏 -->
     <div class="game-bottom-bar">
       <!-- 聊天区域 -->
-      <ChatBox
-        :messages="store.chatList"
-        :disabled="!canPlayerSpeakNow"
-        :my-id="store.myId"
-        :players="store.players"
-        @submit="submitSpeak"
-      />
+      <div class="chat-wrapper">
+        <ChatBox
+          :messages="store.chatList"
+          :disabled="!canPlayerSpeakNow"
+          :my-id="store.myId"
+          :players="store.players"
+          @submit="submitSpeak"
+        />
+      </div>
 
       <!-- 操作面板区域 -->
       <div class="action-panels">
@@ -106,56 +117,15 @@
           :players="store.alivePlayers"
           :current-player-id="store.myId"
           :night-result="store.nightResult"
+          :prophet-check-result="store.prophetCheckResult"
           :teammate-seats="store.wolfTeammates"
           :wolf-target-updates="store.wolfTargetUpdates"
           :antidote-used="selfPlayer?.antidoteUsed"
           :poison-used="selfPlayer?.poisonUsed"
           :wolf-kill-target-id="store.wolfKillTargetId"
-          :wolf-kill-target-label="store.wolfKillTargetLabel"
+          :wolf-kill-target-label="store.wolfKillTargetLabel ?? undefined"
           @submit="submitNightActionHandler"
         />
-
-        <!-- 投票结果明细展示 -->
-        <el-card v-if="voteSummaryDisplay" class="vote-summary-card" shadow="always">
-          <template #header>投票结果</template>
-          <div class="vote-summary-content">
-            <div v-for="item in voteSummaryDisplay.targets" :key="item.targetSeat" class="vote-target-row">
-              <div class="vote-target-header">
-                <el-tag type="danger" effect="dark">{{ item.targetSeat }}号({{ item.targetName }})</el-tag>
-                <span class="vote-count">{{ item.voterSeats.length }}票</span>
-              </div>
-              <div class="vote-voters">
-                <el-tag
-                  v-for="(seat, idx) in item.voterSeats"
-                  :key="seat"
-                  size="small"
-                  type="info"
-                  class="vote-voter-tag"
-                >
-                  {{ seat }}号({{ item.voterNames[idx] }})
-                </el-tag>
-              </div>
-            </div>
-            <!-- 弃票展示 -->
-            <div v-if="voteSummaryDisplay.abstainVoters.length" class="vote-target-row abstain-row">
-              <div class="vote-target-header">
-                <el-tag type="info" effect="dark">弃票</el-tag>
-                <span class="vote-count">{{ voteSummaryDisplay.abstainVoters.length }}人</span>
-              </div>
-              <div class="vote-voters">
-                <el-tag
-                  v-for="av in voteSummaryDisplay.abstainVoters"
-                  :key="av.voterSeat"
-                  size="small"
-                  type="info"
-                  class="vote-voter-tag"
-                >
-                  {{ av.voterSeat }}号({{ av.voterName }})
-                </el-tag>
-              </div>
-            </div>
-          </div>
-        </el-card>
 
         <!-- 预言家查验结果独立展示 -->
         <el-card v-if="prophetCheckDisplay" class="prophet-check-card" shadow="always">
@@ -169,11 +139,62 @@
         </el-card>
       </div>
     </div>
+
+    <!-- 投票结果弹窗 -->
+    <el-dialog
+      v-model="showVoteSummaryDialog"
+      title="🗳️ 投票结果揭晓"
+      width="400px"
+      center
+      append-to-body
+    >
+      <div v-if="voteSummaryDisplay" class="vote-summary-content">
+        <div v-for="item in voteSummaryDisplay.targets" :key="item.targetSeat" class="vote-target-row">
+          <div class="vote-target-header">
+            <el-tag type="danger" effect="dark">{{ item.targetSeat }}号({{ item.targetName }})</el-tag>
+            <span class="vote-count">{{ item.voterSeats.length }}票</span>
+          </div>
+          <div class="vote-voters">
+            <span style="font-size: 12px; color: var(--text-secondary); margin-right: 4px;">被投:</span>
+            <el-tag
+              v-for="(seat, idx) in item.voterSeats"
+              :key="seat"
+              size="small"
+              type="info"
+              class="vote-voter-tag"
+            >
+              {{ seat }}号({{ item.voterNames[idx] }})
+            </el-tag>
+          </div>
+        </div>
+        <!-- 弃票展示 -->
+        <div v-if="voteSummaryDisplay.abstainVoters.length" class="vote-target-row abstain-row">
+          <div class="vote-target-header">
+            <el-tag type="info" effect="dark">弃票</el-tag>
+            <span class="vote-count">{{ voteSummaryDisplay.abstainVoters.length }}人</span>
+          </div>
+          <div class="vote-voters">
+            <el-tag
+              v-for="av in voteSummaryDisplay.abstainVoters"
+              :key="av.voterSeat"
+              size="small"
+              type="info"
+              class="vote-voter-tag"
+            >
+              {{ av.voterSeat }}号({{ av.voterName }})
+            </el-tag>
+          </div>
+        </div>
+      </div>
+      <template #footer>
+        <el-button type="primary" @click="showVoteSummaryDialog = false">确 定</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, watch } from 'vue';
+import { computed, onMounted, onUnmounted, watch, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { isAxiosError } from 'axios';
@@ -192,6 +213,7 @@ import PlayerList from '@/components/game/PlayerList.vue';
 import { useGameLogic } from '@/hooks/useGameLogic';
 import { useGameSocket } from '@/hooks/useGameSocket';
 import { useGameStore } from '@/store/modules/gameStore';
+import type { RoleType } from '@/types/game';
 
 const store = useGameStore();
 const { connect, disconnect, send } = useGameSocket();
@@ -203,6 +225,7 @@ const isNight = computed(() => store.gameStatus === 'night');
 
 const selfPlayer = computed(() => store.selfPlayer);
 const currentPhaseTimeout = computed(() => store.currentPhaseTimeout);
+const showVoteSummaryDialog = ref(false);
 const currentSpeakerName = computed(() => {
   if (!store.currentSpeakerId) {
     return '';
@@ -273,8 +296,22 @@ const handleWolfSelfDestruct = async () => {
 
 /** 预言家查验结果 */
 const prophetCheckDisplay = computed(() => {
-  // TODO: Phase 2 中从私发 announce 消息解析预言家查验结果
-  return null;
+  if (!store.prophetCheckResult) return null;
+  const roleLabels: Record<RoleType, string> = {
+    wolf: '狼人',
+    civilian: '平民',
+    prophet: '预言家',
+    witch: '女巫',
+    guard: '守卫',
+    hunter: '猎人',
+    idiot: '白痴',
+    unknown: '未知',
+  };
+  return {
+    seatLabel: store.prophetCheckResult.seatLabel,
+    roleLabel: roleLabels[store.prophetCheckResult.role] ?? '未知',
+    role: store.prophetCheckResult.role,
+  };
 });
 
 /** 投票结果汇总 */
@@ -301,6 +338,13 @@ const voteSummaryDisplay = computed(() => {
   }
   const result = Object.values(grouped).sort((a, b) => b.voterSeats.length - a.voterSeats.length);
   return { targets: result, abstainVoters };
+});
+
+// 当投票结果变化且不为空时，显示弹窗
+watch(voteSummaryDisplay, (newVal) => {
+  if (newVal && (newVal.targets.length > 0 || newVal.abstainVoters.length > 0)) {
+    showVoteSummaryDialog.value = true;
+  }
 });
 
 const getErrorMessage = (error: unknown, fallback: string) => {
@@ -338,8 +382,116 @@ const submitNightActionHandler = async (targetId: string, actionType?: string) =
   try {
     await apiNightAction(store.gameId, store.myId, targetId, actionType);
     store.setNightActionRequired(false);
+    ElMessage.success('夜间行动已提交');
   } catch (error) {
     ElMessage.error(getErrorMessage(error, '提交夜间行动失败'));
+  }
+};
+
+/** 处理点击玩家座位的交互 (替代底部的 ActionPanel 选择) */
+const handleSeatClick = (targetId: string) => {
+  const targetPlayer = store.players.find(p => p.id === targetId);
+  if (!targetPlayer) return;
+
+  // 如果是投票阶段，且自己可以投票
+  if (store.gameStatus === 'vote' && canPlayerVote(store.gameStatus, selfPlayer.value ?? undefined)) {
+    if (!targetPlayer.isAlive) {
+      ElMessage.warning('不能投票给已出局的玩家');
+      return;
+    }
+    if (targetId === store.myId) {
+      ElMessage.warning('不能投票给自己');
+      return;
+    }
+    ElMessageBox.confirm(
+      `确定要投票给 ${targetPlayer.seatNumber}号(${targetPlayer.name}) 吗？`,
+      '确认投票',
+      { confirmButtonText: '确定', cancelButtonText: '取消', type: 'warning' }
+    ).then(() => {
+      submitVote(targetId);
+    }).catch(() => {});
+    return;
+  }
+
+  // 如果是夜间行动阶段，且自己需要行动
+  if (showNightAction.value) {
+    if (!targetPlayer.isAlive && store.myRole !== 'witch') {
+      // 只有女巫救人的时候才可以点已经"死"(即将死)的人，但正常情况下女巫不通过点击刀口来救人，直接在下面操作，这里加一个基础限制
+      ElMessage.warning('目标玩家已出局');
+      return;
+    }
+    // 狼人刀人
+    if (store.myRole === 'wolf') {
+      if (store.wolfTeammates.includes(targetPlayer.seatNumber)) {
+        ElMessage.warning('不能袭击狼人队友');
+        return;
+      }
+      ElMessageBox.confirm(
+        `确定要袭击 ${targetPlayer.seatNumber}号(${targetPlayer.name}) 吗？`,
+        '夜间袭击',
+        { confirmButtonText: '确定', cancelButtonText: '取消', type: 'error' }
+      ).then(() => {
+        submitNightActionHandler(targetId);
+      }).catch(() => {});
+      return;
+    }
+    // 预言家验人
+    if (store.myRole === 'prophet') {
+      if (targetId === store.myId) {
+        ElMessage.warning('不能查验自己');
+        return;
+      }
+      ElMessageBox.confirm(
+        `确定要查验 ${targetPlayer.seatNumber}号(${targetPlayer.name}) 的身份吗？`,
+        '预言家查验',
+        { confirmButtonText: '确定', cancelButtonText: '取消', type: 'info' }
+      ).then(() => {
+        submitNightActionHandler(targetId);
+      }).catch(() => {});
+      return;
+    }
+    // 女巫、守卫等其他角色的逻辑需要结合具体动作，可能需要弹窗选择技能
+    // 对于女巫可能需要区分毒药和解药
+    if (store.myRole === 'witch') {
+      // 检查解药情况
+      if (!selfPlayer.value?.antidoteUsed && targetId === store.wolfKillTargetId) {
+         ElMessageBox.confirm(
+           `该玩家今晚被袭击了，你要使用解药救活他吗？`,
+           '女巫解药',
+           { confirmButtonText: '使用解药', cancelButtonText: '取消', type: 'warning' }
+         ).then(() => {
+           submitNightActionHandler(targetId, 'save');
+         }).catch(() => {});
+         return;
+      }
+      
+      if (!selfPlayer.value?.poisonUsed) {
+        if (targetId === store.myId) {
+           ElMessage.warning('不能毒杀自己');
+           return;
+        }
+        ElMessageBox.confirm(
+          `确定要对 ${targetPlayer.seatNumber}号(${targetPlayer.name}) 使用毒药吗？`,
+          '女巫撒毒',
+          { confirmButtonText: '使用毒药', cancelButtonText: '取消', type: 'error' }
+        ).then(() => {
+          submitNightActionHandler(targetId, 'poison');
+        }).catch(() => {});
+      } else {
+        ElMessage.warning('毒药已使用或不可用');
+      }
+      return;
+    }
+    if (store.myRole === 'guard') {
+      ElMessageBox.confirm(
+        `确定要守护 ${targetPlayer.seatNumber}号(${targetPlayer.name}) 吗？`,
+        '守卫守护',
+        { confirmButtonText: '守护', cancelButtonText: '取消', type: 'success' }
+      ).then(() => {
+        submitNightActionHandler(targetId);
+      }).catch(() => {});
+      return;
+    }
   }
 };
 
@@ -370,11 +522,75 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   min-height: 100vh;
-  min-width: 768px;
+  width: 100%;
   background: var(--bg-primary);
-  transition: background 0.5s ease, color 0.5s ease;
-  padding: 12px 16px;
+  transition: background 1s ease-in-out, color 1s ease-in-out;
+  padding: 12px;
   gap: 12px;
+  position: relative;
+  overflow-x: hidden;
+  box-sizing: border-box;
+}
+
+/* 沉浸式背景 */
+.immersive-bg {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0.3;
+  transition: opacity 2s ease-in-out, background 2s ease-in-out;
+  background: linear-gradient(to bottom, #87CEEB 0%, #E0F6FF 100%);
+}
+
+.immersive-bg.is-night {
+  opacity: 0.8;
+  background: linear-gradient(to bottom, #0A0A2A 0%, #1A1A3A 100%);
+}
+
+.moon-or-sun {
+  position: absolute;
+  top: 20px;
+  right: 40px;
+  width: 60px;
+  height: 60px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 30% 30%, #FFFDE7, #FFF59D);
+  box-shadow: 0 0 20px #FFF59D;
+  transition: all 2s ease-in-out;
+}
+
+.immersive-bg.is-night .moon-or-sun {
+  top: 40px;
+  right: 60px;
+  width: 50px;
+  height: 50px;
+  background: radial-gradient(circle at 70% 30%, transparent 40%, #E0E0E0 100%);
+  box-shadow: 0 0 10px rgba(255, 255, 255, 0.2);
+  transform: rotate(-30deg);
+}
+
+.immersive-bg .stars {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  background-image: 
+    radial-gradient(1px 1px at 20px 30px, #eee, rgba(0,0,0,0)),
+    radial-gradient(1px 1px at 40px 70px, #fff, rgba(0,0,0,0)),
+    radial-gradient(1px 1px at 50px 160px, #ddd, rgba(0,0,0,0)),
+    radial-gradient(2px 2px at 90px 40px, #fff, rgba(0,0,0,0)),
+    radial-gradient(2px 2px at 130px 80px, #fff, rgba(0,0,0,0));
+  background-repeat: repeat;
+  background-size: 200px 200px;
+  opacity: 0;
+  transition: opacity 2s ease-in-out;
+}
+
+.immersive-bg.is-night .stars {
+  opacity: 0.6;
 }
 
 /* 顶栏 */
@@ -388,6 +604,7 @@ onUnmounted(() => {
   border-radius: 8px;
   border: 1px solid var(--border-color);
   transition: background 0.5s ease, border-color 0.5s ease;
+  z-index: 1;
 }
 
 /* 中央区域：圆桌 */
@@ -399,6 +616,7 @@ onUnmounted(() => {
   justify-content: center;
   position: relative;
   transition: background 0.5s ease;
+  z-index: 1;
 }
 
 /* 中央浮动内容 */
@@ -410,6 +628,7 @@ onUnmounted(() => {
   max-height: 180px;
   overflow-y: auto;
   padding: 8px;
+  z-index: 1;
 }
 
 .speaker-hint {
@@ -420,6 +639,7 @@ onUnmounted(() => {
 .game-bottom-bar {
   flex-shrink: 0;
   display: flex;
+  flex-wrap: wrap;
   gap: 12px;
   position: sticky;
   bottom: 0;
@@ -429,6 +649,15 @@ onUnmounted(() => {
   border: 1px solid var(--border-color);
   padding: 8px;
   transition: background 0.5s ease, border-color 0.5s ease;
+  z-index: 1;
+}
+
+.chat-wrapper {
+  flex: 2;
+  min-width: 300px;
+  max-height: 360px;
+  display: flex;
+  flex-direction: column;
 }
 
 /* 操作面板区域 */

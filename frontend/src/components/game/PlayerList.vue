@@ -5,6 +5,8 @@
       :players="players"
       :current-speaker-id="currentSpeakerId ?? null"
       :my-id="myId"
+      :wolf-teammates="wolfTeammates"
+      :wolf-target-updates="wolfTargetUpdates"
       @seat-click="(id: string) => $emit('seat-click', id)"
     >
       <!-- 中央 slot 内容由父组件传入 -->
@@ -24,6 +26,8 @@ defineProps<{
   currentSpeakerId?: string | null;
   /** 自己的 ID */
   myId: string;
+  wolfTeammates?: number[];
+  wolfTargetUpdates?: { wolfId: string; wolfSeat: number; targetSeat: number }[];
 }>();
 
 defineEmits<{

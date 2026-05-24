@@ -46,7 +46,7 @@ const props = defineProps<{
   /** 是否禁用输入 */
   disabled?: boolean;
   /** 自己的 ID */
-  myId?: string;
+  myId: string;
   /** 玩家列表（用于查找消息发送者信息） */
   players?: Player[];
 }>();

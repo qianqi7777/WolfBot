@@ -273,7 +273,16 @@ export function useGameSocket() {
       case 'player_update':
         if (typeof message.payload?.playerId === 'string' && isBoolean(message.payload?.isAlive)) {
           const isSheriff = isBoolean(message.payload?.isSheriff) ? message.payload.isSheriff as boolean : undefined;
-          store.updatePlayerStatus(message.payload.playerId, message.payload.isAlive, isSheriff);
+          const revealedRole = isRoleType(message.payload?.revealedRole)
+            ? message.payload.revealedRole as RoleType
+            : undefined;
+          store.updatePlayerStatus(message.payload.playerId, message.payload.isAlive, isSheriff, revealedRole);
+          if (revealedRole && typeof message.payload?.playerName === 'string') {
+            store.setProphetCheckResult({
+              seatLabel: message.payload.playerName,
+              role: revealedRole,
+            });
+          }
         }
         break;
       case 'player_speak':
@@ -331,13 +340,27 @@ export function useGameSocket() {
         }
         // 狼人队友信息
         if (isRecord(message.payload) && Array.isArray(message.payload.teammates)) {
-          store.setWolfTeammates(message.payload.teammates.filter((t: unknown) => typeof t === 'string'));
+          // payload.teammates is ['1号', '3号'] -> parse out numbers
+          const teammateSeats = message.payload.teammates
+            .filter((t: unknown) => typeof t === 'string')
+            .map((t: string) => parseInt(t.replace('号', ''), 10))
+            .filter((n: number) => !isNaN(n));
+          store.setWolfTeammates(teammateSeats);
         }
-        // 女巫刀口信息
-        if (isRecord(message.payload)) {
-          const wolfTargetId = typeof message.payload.wolfKillTargetId === 'string' ? message.payload.wolfKillTargetId : null;
-          const wolfTargetLabel = typeof message.payload.wolfKillTargetLabel === 'string' ? message.payload.wolfKillTargetLabel : null;
-          store.setWolfKillTarget(wolfTargetId, wolfTargetLabel);
+        // 女巫刀口信息：
+        // - 新夜开始时先重置为待定，提示等待狼人选择目标
+        // - 有刀口时写入具体目标
+        // - 夜晚结算后没有死亡时再落成 none
+        if (isRecord(message.payload) && message.payload.role === 'witch' && message.payload.actionRequired === true) {
+          const hasWolfTargetId = 'wolfKillTargetId' in message.payload;
+          const hasWolfTargetLabel = 'wolfKillTargetLabel' in message.payload;
+          if (hasWolfTargetId || hasWolfTargetLabel) {
+            const wolfTargetId = typeof message.payload.wolfKillTargetId === 'string' ? message.payload.wolfKillTargetId : null;
+            const wolfTargetLabel = typeof message.payload.wolfKillTargetLabel === 'string' ? message.payload.wolfKillTargetLabel : null;
+            store.setWolfKillTarget(wolfTargetId, wolfTargetLabel);
+          } else {
+            store.setWolfKillTarget(null, null);
+          }
         }
         // 提取 deadline
         if (isRecord(message.payload) && typeof message.payload.deadline === 'string') {
@@ -354,11 +377,23 @@ export function useGameSocket() {
           const result: NightResultPayload = {
             killedPlayerId: typeof message.payload.killedPlayerId === 'string' ? message.payload.killedPlayerId : null,
             guardedPlayerId: typeof message.payload.guardedPlayerId === 'string' ? message.payload.guardedPlayerId : null,
-            guardBlocked: typeof message.payload.guardedPlayerId === 'boolean' ? message.payload.guardedPlayerId : undefined,
+            guardBlocked: typeof message.payload.guardBlocked === 'boolean' ? message.payload.guardBlocked : undefined,
+            witchSaved: typeof message.payload.witchSaved === 'boolean' ? message.payload.witchSaved : undefined,
+            witchSavedPlayerId: typeof message.payload.witchSavedPlayerId === 'string' ? message.payload.witchSavedPlayerId : null,
+            witchPoisonedPlayerId: typeof message.payload.witchPoisonedPlayerId === 'string' ? message.payload.witchPoisonedPlayerId : null,
+            allKilledIds: Array.isArray(message.payload.allKilledIds)
+              ? message.payload.allKilledIds.filter((id: unknown) => typeof id === 'string')
+              : undefined,
           };
           store.setNightResult(result);
-          if (result.killedPlayerId) {
-            store.updatePlayerStatus(result.killedPlayerId, false);
+          const killedIds = result.allKilledIds?.length
+            ? result.allKilledIds
+            : (result.killedPlayerId ? [result.killedPlayerId] : []);
+          for (const deadId of killedIds) {
+            store.updatePlayerStatus(deadId, false);
+          }
+          if (!killedIds.length) {
+            store.setWolfKillTarget('none', null);
           }
         }
         break;

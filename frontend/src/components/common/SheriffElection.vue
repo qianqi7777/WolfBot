@@ -52,6 +52,7 @@
         <ChatBox
           :messages="[]"
           :disabled="false"
+          :my-id="store.myId"
           @submit="handleCampaignSpeech"
         />
         <el-button

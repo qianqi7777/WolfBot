@@ -613,7 +613,7 @@ VALID_TRANSITIONS: dict[GameStatus, set[GameStatus]] = {
     GameStatus.role_select: {GameStatus.night, GameStatus.end},
     GameStatus.night: {GameStatus.day, GameStatus.night, GameStatus.end},
     GameStatus.day: {GameStatus.sheriff_election, GameStatus.speak, GameStatus.end},
-    GameStatus.sheriff_election: {GameStatus.speak, GameStatus.day, GameStatus.end},
+    GameStatus.sheriff_election: {GameStatus.speak, GameStatus.day, GameStatus.night, GameStatus.end},
     GameStatus.speak: {GameStatus.vote, GameStatus.night, GameStatus.end},
     GameStatus.vote: {GameStatus.night, GameStatus.end},
     GameStatus.end: set(),  # 终态不可转换
@@ -772,6 +772,33 @@ def record_speak(game_id: str, player_id: str, content: str) -> None:
     else:
         game.speak_turn_submitted = True
     game.announcements.append("收到一条发言")
+
+
+def record_sheriff_campaign_speak(game_id: str, player_id: str, content: str) -> None:
+    """记录警长竞选发言。
+    竞选发言不依赖普通发言轮次，只要求当前处于竞选阶段且候选人存活。"""
+    game = _get_game_or_raise(game_id)
+    if game.game_status != GameStatus.sheriff_election:
+        raise AppError("当前阶段不能进行竞选发言", status_code=409)
+
+    speaker = next((item for item in game.players if item.id == player_id), None)
+    if speaker is None:
+        raise AppError("玩家不存在", status_code=404)
+    if not speaker.is_alive:
+        raise AppError("玩家已死亡，无法发言", status_code=409)
+
+    game.chats.append(
+        {
+            "id": f"chat-{len(game.chats) + 1}",
+            "playerId": speaker.id,
+            "playerName": f"{speaker.seat_number}号({speaker.name})【竞选】",
+            "content": content,
+            "time": utc_now_iso(),
+            "isAI": speaker.is_ai,
+        }
+    )
+    game.sheriff_campaign_submitted = True
+    game.announcements.append("收到一条竞选发言")
 
 
 def record_last_words(game_id: str, player_id: str, content: str) -> None:
@@ -1506,6 +1533,7 @@ def wolf_self_destruct(game_id: str, player_id: str) -> dict[str, object]:
     clear_deadline(game_id)
 
     # 检查胜负
+    from app.domain.roles import get_preset_rule
     win_condition = get_preset_rule(game.room_settings.scene.preset, "win_condition")
     winner = _check_win_condition(game, win_condition)
     if winner:

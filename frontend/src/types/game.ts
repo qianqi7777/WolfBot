@@ -62,6 +62,7 @@ export interface Player {
   isSpectator?: boolean;
   isIdiotRevealed?: boolean;
   lastProphetTargetId?: string | null;
+  revealedRole?: RoleType | null;
 }
 
 export interface ChatMessage {

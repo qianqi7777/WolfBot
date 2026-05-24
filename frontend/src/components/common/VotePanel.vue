@@ -1,21 +1,37 @@
 <template>
-  <el-card shadow="never" class="vote-panel">
-    <template #header>投票面板</template>
-    <el-radio-group v-model="selected">
-      <el-radio-button v-for="player in votablePlayers" :key="player.id" :value="player.id">
-        {{ player.seatNumber }}号({{ player.name }})
-      </el-radio-button>
-    </el-radio-group>
+  <el-card shadow="never" class="vote-panel" :class="{ 'is-active': !disabled }">
+    <template #header>
+      <div class="panel-header">
+        <span>✋ 投票阶段</span>
+      </div>
+    </template>
+    
+    <div class="panel-content">
+      <el-alert
+        v-if="!disabled"
+        title="请在圆桌上点击玩家头像进行投票，或选择弃票"
+        type="warning"
+        :closable="false"
+        show-icon
+      />
+      <el-alert
+        v-else
+        title="等待其他人投票..."
+        type="info"
+        :closable="false"
+        show-icon
+      />
+    </div>
+
     <div class="vote-actions">
-      <el-button type="danger" :disabled="disabled || !selected || selected === 'abstain'" @click="handleVote">投票</el-button>
-      <el-button type="info" :disabled="disabled" @click="handleAbstain">弃票</el-button>
+      <el-button type="info" plain :disabled="disabled" @click="handleAbstain" style="width: 100%">
+        放弃投票 (弃票)
+      </el-button>
     </div>
   </el-card>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue';
-
 import type { Player } from '@/types/game';
 
 const props = defineProps<{
@@ -28,33 +44,31 @@ const emit = defineEmits<{
   submit: [targetId: string];
 }>();
 
-const selected = defineModel<string>('selected', { default: '' });
-
-const votablePlayers = computed(() =>
-  props.players.filter((p) => p.id !== props.currentPlayerId),
-);
-
-const handleVote = () => {
-  if (props.disabled || !selected.value || selected.value === 'abstain') return;
-  emit('submit', selected.value);
-  selected.value = '';
-};
-
 const handleAbstain = () => {
   if (props.disabled) return;
   emit('submit', 'abstain');
-  selected.value = '';
 };
 </script>
 
 <style scoped>
 .vote-panel {
-  transition: background 0.5s ease, border-color 0.5s ease;
+  border-radius: 12px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-card);
+}
+.vote-panel.is-active {
+  border-color: var(--accent-color);
+  box-shadow: 0 0 10px rgba(var(--accent-color-rgb), 0.2);
+}
+.panel-header {
+  font-weight: bold;
+  color: var(--text-primary);
+}
+.panel-content {
+  margin-bottom: 12px;
 }
 .vote-actions {
-  margin-top: 12px;
   display: flex;
-  justify-content: flex-end;
-  gap: 8px;
+  justify-content: center;
 }
 </style>

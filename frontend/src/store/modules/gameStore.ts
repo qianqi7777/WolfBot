@@ -43,7 +43,7 @@ export interface GameState {
   result: GameResultPayload | null;
   nightActionRequired: boolean;
   nightResult: NightResultPayload | null;
-  wolfTeammates: string[];
+  wolfTeammates: number[];
   wolfTargetUpdates: WolfTargetUpdate[];
   roomSettings: RoomSettings;
   ownerPlayerId: string | null;
@@ -68,6 +68,7 @@ export interface GameState {
   // 女巫刀口信息
   wolfKillTargetId: string | null;
   wolfKillTargetLabel: string | null;
+  prophetCheckResult: { seatLabel: string; role: RoleType } | null;
   // 发言方向选择
   speakDirectionRequest: SpeakDirectionRequestPayload | null;
 }
@@ -194,6 +195,7 @@ export const useGameStore = defineStore('game', {
     wolfSelfDestructed: null,
     wolfKillTargetId: null,
     wolfKillTargetLabel: null,
+    prophetCheckResult: null,
     speakDirectionRequest: null,
   }),
   getters: {
@@ -215,6 +217,7 @@ export const useGameStore = defineStore('game', {
       this.gameId = snapshot.gameId;
       this.myId = playerId;
       this.players = snapshot.players;
+      this.prophetCheckResult = null;
       this.gameStatus = snapshot.gameStatus;
       this.currentRound = snapshot.currentRound;
       this.currentSpeakerId = snapshot.currentSpeakerId ?? null;
@@ -292,7 +295,7 @@ export const useGameStore = defineStore('game', {
     setNightActionRequired(flag: boolean) {
       this.nightActionRequired = flag;
     },
-    setWolfTeammates(teammates: string[]) {
+    setWolfTeammates(teammates: number[]) {
       this.wolfTeammates = teammates;
     },
     addWolfTargetUpdate(update: WolfTargetUpdate) {
@@ -304,6 +307,9 @@ export const useGameStore = defineStore('game', {
     },
     setNightResult(result: NightResultPayload) {
       this.nightResult = result;
+    },
+    setProphetCheckResult(result: { seatLabel: string; role: RoleType } | null) {
+      this.prophetCheckResult = result;
     },
     resetNightActions() {
       this.nightActionRequired = false;
@@ -396,12 +402,15 @@ export const useGameStore = defineStore('game', {
         time: new Date().toISOString(),
       });
     },
-    updatePlayerStatus(playerId: string, isAlive: boolean, isSheriff?: boolean) {
+    updatePlayerStatus(playerId: string, isAlive: boolean, isSheriff?: boolean, revealedRole?: RoleType | null) {
       const player = this.players.find((item) => item.id === playerId);
       if (player) {
         player.isAlive = isAlive;
         if (isSheriff !== undefined) {
           player.isSheriff = isSheriff;
+        }
+        if (revealedRole !== undefined) {
+          player.revealedRole = revealedRole;
         }
       }
     },
@@ -411,6 +420,7 @@ export const useGameStore = defineStore('game', {
       this.currentRound = result.currentRound;
       this.currentSpeakerId = null;
       this.players = result.players;
+      this.prophetCheckResult = null;
       this.announceList = result.announcements.map((content, index) => ({
         id: `result-${index}`,
         content,
@@ -454,6 +464,9 @@ export const useGameStore = defineStore('game', {
       this.sheriffElectResult = null;
       this.sheriffTransfer = null;
       this.wolfSelfDestructed = null;
+      this.wolfKillTargetId = null;
+      this.wolfKillTargetLabel = null;
+      this.prophetCheckResult = null;
       this.speakDirectionRequest = null;
       clearSession();
     },

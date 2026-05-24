@@ -49,8 +49,8 @@
           </el-table-column>
           <el-table-column label="身份" width="100" align="center">
             <template #default="{ row }">
-              <el-tag :type="roleTagType(row.role)" effect="dark">
-                {{ roleLabels[row.role] ?? '未知' }}
+              <el-tag :type="roleTagType(row.role as RoleType)" effect="dark">
+                {{ roleLabels[row.role as RoleType] ?? '未知' }}
               </el-tag>
             </template>
           </el-table-column>

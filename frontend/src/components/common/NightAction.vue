@@ -1,59 +1,42 @@
 <template>
   <div class="night-action">
-    <el-card header="夜间行动">
+    <el-card shadow="never" class="night-panel" :class="{ 'is-active': !disabled }">
+      <template #header>
+        <div class="panel-header">🌙 夜间行动</div>
+      </template>
+
       <!-- 狼人：选择击杀目标 -->
       <template v-if="role === 'wolf'">
-        <p>请选择要击杀的目标：</p>
-        <p v-if="teammates.length" class="teammate-hint">你的狼人队友：{{ teammates.join('、') }}</p>
+        <el-alert
+          v-if="!disabled"
+          title="请在上方圆桌点击要袭击的玩家"
+          type="error"
+          :closable="false"
+          show-icon
+          style="margin-bottom: 8px"
+        />
+        <p v-if="teammateSeats && teammateSeats.length" class="teammate-hint">你的狼人队友：{{ teammateSeats.join('号、') }}号</p>
         <!-- 狼人队友的实时选择 -->
-        <div v-if="wolfTargetUpdates.length" class="wolf-target-updates">
+        <div v-if="wolfTargetUpdates && wolfTargetUpdates.length" class="wolf-target-updates">
           <div v-for="update in wolfTargetUpdates" :key="update.wolfId" class="wolf-target-item">
             <el-tag type="warning" size="small">{{ update.wolfSeat }}号</el-tag>
             <span class="wolf-target-arrow">→</span>
             <el-tag type="danger" size="small">{{ update.targetSeat }}号</el-tag>
           </div>
         </div>
-        <el-radio-group v-model="selectedTarget" :disabled="disabled">
-          <el-radio
-            v-for="player in targetPlayers"
-            :key="player.id"
-            :value="player.id"
-          >
-            {{ player.seatNumber }}号({{ player.name }})
-          </el-radio>
-        </el-radio-group>
-        <el-button
-          type="danger"
-          :disabled="disabled || !selectedTarget"
-          style="margin-top: 12px"
-          @click="handleSubmit"
-        >
-          确认击杀
-        </el-button>
       </template>
 
       <!-- 预言家：选择查验目标 -->
       <template v-else-if="role === 'prophet'">
-        <p>请选择要查验的玩家：</p>
-        <el-radio-group v-model="selectedTarget" :disabled="disabled">
-          <el-radio
-            v-for="player in targetPlayers"
-            :key="player.id"
-            :value="player.id"
-          >
-            {{ player.seatNumber }}号({{ player.name }})
-          </el-radio>
-        </el-radio-group>
-        <el-button
-          type="primary"
-          :disabled="disabled || !selectedTarget"
-          style="margin-top: 12px"
-          @click="handleSubmit"
-        >
-          确认查验
-        </el-button>
+        <el-alert
+          v-if="!disabled"
+          title="请在上方圆桌点击要查验身份的玩家"
+          type="info"
+          :closable="false"
+          show-icon
+        />
         <!-- 查验结果显示 -->
-        <div v-if="checkResult" class="check-result">
+        <div v-if="checkResult" class="check-result" style="margin-top: 12px">
           <el-alert
             :title="`${checkResult.seatLabel} 的身份是：${roleLabels[checkResult.role]}`"
             :type="checkResult.role === 'wolf' ? 'error' : 'success'"
@@ -64,25 +47,14 @@
 
       <!-- 守卫：选择守护目标 -->
       <template v-else-if="role === 'guard'">
-        <p>请选择要守护的玩家：</p>
-        <el-radio-group v-model="selectedTarget" :disabled="disabled">
-          <el-radio
-            v-for="player in targetPlayers"
-            :key="player.id"
-            :value="player.id"
-          >
-            {{ player.seatNumber }}号({{ player.name }})
-          </el-radio>
-        </el-radio-group>
-        <el-button
+        <el-alert
+          v-if="!disabled"
+          title="请在上方圆桌点击要守护的玩家（可点自己）"
           type="success"
-          :disabled="disabled || !selectedTarget"
-          style="margin-top: 12px"
-          @click="handleSubmit"
-        >
-          确认守护
-        </el-button>
-        <div v-if="guardResult" class="check-result">
+          :closable="false"
+          show-icon
+        />
+        <div v-if="guardResult" class="check-result" style="margin-top: 12px">
           <el-alert
             :title="guardResult.guardBlocked ? `你守住了 ${guardResult.seatLabel}` : `你守护了 ${guardResult.seatLabel}`"
             type="success"
@@ -103,67 +75,39 @@
             style="margin-bottom: 12px"
           />
           <p>是否使用解药？</p>
-          <div class="potion-select">
-            <el-radio-group v-model="potionType" :disabled="disabled" size="large">
-              <el-radio-button value="save">
-                💚 使用解药（救活{{ wolfKillLabel }}）
-              </el-radio-button>
-              <el-radio-button value="skip">
-                ⏭️ 不使用解药
-              </el-radio-button>
-            </el-radio-group>
+          <div class="potion-select" style="margin-top: 8px">
+            <el-button type="success" :disabled="disabled" @click="handleSaveSubmit(true)">
+              💚 使用解药救活
+            </el-button>
+            <el-button type="info" :disabled="disabled" @click="handleSaveSubmit(false)">
+              ⏭️ 不使用解药
+            </el-button>
           </div>
-          <el-button
-            v-if="potionType"
-            type="warning"
-            :disabled="disabled"
-            style="margin-top: 12px"
-            @click="handleSaveSubmit"
-          >
-            {{ potionType === 'save' ? '确认使用解药' : '确认跳过' }}
-          </el-button>
         </div>
         <div v-else-if="antidoteUsed || saveSubmitted" class="witch-save-section">
-          <el-alert title="解药已使用" type="info" show-icon :closable="false" class="used-alert" />
+          <el-alert title="解药已使用或跳过" type="info" show-icon :closable="false" class="used-alert" />
         </div>
         <!-- 毒药：选择毒杀目标 -->
         <div v-if="!poisonUsed && !poisonSubmitted" class="witch-poison-section">
           <el-divider />
-          <p>毒药：选择要毒杀的玩家</p>
-          <el-radio-group v-model="selectedTarget" :disabled="disabled">
-            <el-radio
-              v-for="player in targetPlayers"
-              :key="player.id"
-              :value="player.id"
-            >
-              {{ player.seatNumber }}号({{ player.name }})
-            </el-radio>
-          </el-radio-group>
-          <el-button
-            type="danger"
-            :disabled="disabled || !selectedTarget"
-            style="margin-top: 8px"
-            size="small"
-            @click="handlePoisonSubmit"
-          >
-            确认毒杀
-          </el-button>
+          <el-alert
+            v-if="!disabled"
+            title="如果要使用毒药，请在上方圆桌点击目标玩家"
+            type="error"
+            :closable="false"
+            show-icon
+          />
         </div>
         <div v-else-if="poisonUsed || poisonSubmitted" class="witch-poison-section">
-          <el-alert title="毒药已使用" type="info" show-icon :closable="false" class="used-alert" />
+          <el-divider />
+          <el-alert title="毒药已使用或跳过" type="info" show-icon :closable="false" class="used-alert" />
         </div>
-        <!-- 女巫用药情况汇总（只给女巫自己看） -->
-        <WitchPotionStatus
-          :antidote-used="antidoteUsed || saveSubmitted"
-          :poison-used="poisonUsed || poisonSubmitted"
-          :save-target="saveSubmitted ? wolfKillLabel : null"
-          :poison-target="poisonSubmitted ? poisonTargetLabel : null"
-        />
-      </template>
-
-      <!-- 无夜间行动的角色（平民、猎人、白痴等）：等待 -->
-      <template v-else>
-        <p>夜间等待中...</p>
+        <!-- 结束回合按钮 (如果没有用毒，可以选择结束) -->
+        <div v-if="!poisonUsed && !poisonSubmitted && (!(!antidoteUsed && !saveSubmitted))" style="margin-top: 12px">
+            <el-button type="info" plain :disabled="disabled" style="width: 100%" @click="handleSkipPoison">
+              结束回合 (不使用毒药)
+            </el-button>
+        </div>
       </template>
     </el-card>
   </div>
@@ -171,22 +115,17 @@
 
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-
-import type { Player, RoleType, WolfTargetUpdate } from '@/types/game';
-import { ROLE_LABELS } from '@/utils/constants';
-import WitchPotionStatus from './WitchPotionStatus.vue';
+import type { Player, RoleType } from '@/types/game';
 
 const props = defineProps<{
   role: RoleType;
   players: Player[];
+  currentPlayerId: string;
+  nightResult?: Record<string, any> | null;
+  prophetCheckResult?: { seatLabel: string; role: RoleType } | null;
   disabled?: boolean;
-  currentPlayerId?: string;
-  nightResult?: {
-    guardedPlayerId?: string | null;
-    guardBlocked?: boolean;
-  } | null;
-  teammateSeats?: string[];
-  wolfTargetUpdates?: WolfTargetUpdate[];
+  teammateSeats?: number[];
+  wolfTargetUpdates?: { wolfId: string; wolfSeat: number; targetSeat: number }[];
   antidoteUsed?: boolean;
   poisonUsed?: boolean;
   wolfKillTargetId?: string | null;
@@ -197,126 +136,126 @@ const emit = defineEmits<{
   submit: [targetId: string, actionType?: string];
 }>();
 
-const selectedTarget = ref('');
-const potionType = ref('');  // 'save' | 'poison'
-const roleLabels = ROLE_LABELS;
-
-/** 狼人队友（从后端推送的 teammates 数据） */
-const teammates = computed(() => props.teammateSeats ?? []);
-
-/** 狼人队友的实时刀目标 */
-const wolfTargetUpdates = computed(() => props.wolfTargetUpdates ?? []);
-
-/** 女巫解药已使用 */
-const antidoteUsed = computed(() => props.antidoteUsed ?? false);
-
-/** 女巫毒药已使用 */
-const poisonUsed = computed(() => props.poisonUsed ?? false);
-
-/** 狼人刀口信息 */
-const wolfKillLabel = computed(() => props.wolfKillTargetLabel || '未知');
-const wolfKillInfo = computed(() =>
-  props.wolfKillTargetId
-    ? `⚠️ 狼人今晚袭击了 ${wolfKillLabel.value}`
-    : '今晚无人被刀',
-);
-
-/** 目标玩家：仅存活的玩家，狼人和女巫毒药可以选自己（毒药不限制自毒，由后端校验） */
-const targetPlayers = computed(() => {
-  const canTargetSelf = props.role === 'wolf';
-  return props.players.filter(
-    (p) => p.isAlive && (canTargetSelf || p.id !== props.currentPlayerId),
-  );
-});
-
+// 本地状态
 const saveSubmitted = ref(false);
 const poisonSubmitted = ref(false);
 
-const handleSaveSubmit = () => {
-  if (potionType.value === 'save' && props.wolfKillTargetId) {
-    emit('submit', props.wolfKillTargetId, 'save');
-    saveSubmitted.value = true;
-  } else if (potionType.value === 'skip') {
-    // 跳过解药：提交一个空操作
-    emit('submit', '', '');
-    saveSubmitted.value = true;
+const handleSaveSubmit = (useSave: boolean) => {
+  if (props.disabled) return;
+  if (useSave) {
+    emit('submit', props.wolfKillTargetId || '', 'save');
+  } else {
+    emit('submit', 'skip', 'skip_save');
   }
+  saveSubmitted.value = true;
 };
 
-const handlePoisonSubmit = () => {
-  if (selectedTarget.value) {
-    emit('submit', selectedTarget.value, 'poison');
+const handleSkipPoison = () => {
+    if (props.disabled) return;
+    emit('submit', 'skip', 'skip_poison');
     poisonSubmitted.value = true;
-  }
 };
 
-/** 毒药目标标签 */
-const poisonTargetLabel = computed(() => {
-  if (!selectedTarget.value) return null;
-  const target = props.players.find((p) => p.id === selectedTarget.value);
-  return target ? `${target.seatNumber}号(${target.name})` : null;
-});
+// 角色文案映射
+const roleLabels: Record<string, string> = {
+  wolf: '🐺 狼人',
+  civilian: '🧑‍🌾 平民',
+  prophet: '🔮 预言家',
+  witch: '🧙‍♀️ 女巫',
+  guard: '🛡️ 守卫',
+  hunter: '🔫 猎人',
+};
 
-/** 查验结果显示（暂从 announce 获取） */
+// 结果回显逻辑
 const checkResult = computed(() => {
-  // TODO: Phase 2 从私发 announce 解析查验结果
-  return null;
+  if (props.role !== 'prophet' || !props.prophetCheckResult) return null;
+  return props.prophetCheckResult;
 });
 
 const guardResult = computed(() => {
-  if (props.role !== 'guard' || !props.nightResult?.guardedPlayerId) return null;
-  const target = props.players.find((p) => p.id === props.nightResult!.guardedPlayerId);
-  return target ? { seatLabel: `${target.seatNumber}号`, guardBlocked: props.nightResult.guardBlocked ?? false } : null;
+  if (props.role !== 'guard' || !props.nightResult) return null;
+  const guardedTargetId = typeof props.nightResult.guardedPlayerId === 'string'
+    ? props.nightResult.guardedPlayerId
+    : null;
+  if (!guardedTargetId) return null;
+  const target = props.players.find((p) => p.id === guardedTargetId);
+  if (!target) return null;
+  return {
+    seatLabel: `${target.seatNumber}号(${target.name})`,
+    guardBlocked: !!props.nightResult.guardBlocked,
+  };
+});
+
+const wolfKillInfo = computed(() => {
+  if (props.antidoteUsed || saveSubmitted.value) {
+    return '';
+  }
+  if (props.wolfKillTargetId === null) {
+    return '等待狼人选择目标...';
+  }
+  if (props.wolfKillTargetId === 'none') {
+    return '平安夜，昨晚没有玩家被击杀。';
+  }
+  if (props.wolfKillTargetLabel) {
+    return `昨晚 ${props.wolfKillTargetLabel} 被击杀。`;
+  }
+  return '获取刀口信息中...';
+});
+const wolfKillLabel = computed(() => {
+  if (props.wolfKillTargetId === 'none') return '';
+  return props.wolfKillTargetLabel || '';
 });
 </script>
 
 <style scoped>
 .night-action {
-  margin-bottom: 0;
+  transition: all 0.5s ease;
+}
+.night-panel {
+  border-radius: 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+}
+.night-panel.is-active {
+  border-color: var(--accent-color);
+  box-shadow: 0 0 10px rgba(var(--accent-color-rgb), 0.2);
+}
+.panel-header {
+  font-weight: bold;
+  color: var(--text-primary);
 }
 .teammate-hint {
-  color: #e6a23c;
+  color: var(--faction-wolf, #ef4444);
+  font-size: 14px;
   margin-bottom: 8px;
-  font-weight: bold;
-}
-.check-result {
-  margin-top: 12px;
 }
 .wolf-target-updates {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-bottom: 8px;
-  padding: 8px;
-  background: var(--bg-card-glass, rgba(253, 246, 236, 0.6));
-  border-radius: 4px;
-  border: 1px solid var(--border-color);
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
 }
 .wolf-target-item {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 8px;
+  background: var(--bg-primary);
+  padding: 4px 8px;
+  border-radius: 4px;
 }
 .wolf-target-arrow {
-  color: #e6a23c;
-  font-weight: bold;
+  color: var(--text-secondary);
+}
+.witch-save-section,
+.witch-poison-section {
+  display: flex;
+  flex-direction: column;
 }
 .potion-select {
-  margin-bottom: 16px;
-}
-.potion-select .el-radio-button {
-  margin-right: 8px;
-}
-.hint-text {
-  color: var(--text-secondary, #909399);
-  font-size: 13px;
-  margin: 8px 0;
-}
-.used-label {
-  color: var(--text-secondary, #c0c4cc);
-  font-size: 12px;
+  display: flex;
+  gap: 12px;
 }
 .used-alert {
-  margin-bottom: 8px;
+  opacity: 0.7;
 }
 </style>

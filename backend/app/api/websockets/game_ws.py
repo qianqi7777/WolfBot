@@ -179,16 +179,16 @@ async def game_ws(websocket: WebSocket) -> None:
                                 payload={"content": "夜间行动已提交"},
                             ).model_dump_json(),
                         )
-                        # 狼人刀目标实时通知队友
+                        # 狼人刀目标实时通知队友（包括自己，便于全队同步）
                         game = get_game_state(game_id)
                         actor = next((p for p in game.players if p.id == actor_id), None)
                         if actor and actor.role == RoleType.wolf:
                             target_player = next((p for p in game.players if p.id == target_id), None)
                             target_label = f"{target_player.seat_number}号" if target_player else "未知"
                             actor_label = f"{actor.seat_number}号"
-                            # 向其他存活狼人私发
+                            # 向所有存活狼人私发
                             for p in game.players:
-                                if p.id != actor_id and p.is_alive and SKILL_REGISTRY[p.role].faction == "wolf":
+                                if p.is_alive and SKILL_REGISTRY[p.role].faction == "wolf":
                                     await manager.send_to_player(
                                         game_id, p.id,
                                         SocketMessage(
