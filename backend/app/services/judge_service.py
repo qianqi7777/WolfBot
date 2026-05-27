@@ -231,6 +231,14 @@ class Judge:
 
         hunter_name = f"{hunter.seat_number}号({hunter.name})"
         await self._announce(f"🔫 {hunter_name}（猎人）死亡，可以开枪带走一名玩家！")
+        # 公开广播猎人翻牌（合规公开身份）。
+        # 使用 publicRole 而非 revealedRole 字段，避免与预言家私发查验结果冲突。
+        await self._broadcast(MessageType.player_update, {
+            "playerId": hunter_id,
+            "playerName": hunter_name,
+            "isAlive": False,
+            "publicRole": "hunter",
+        })
 
         # 获取可射击目标：存活玩家（不含自己）
         targets = [p for p in game.players if p.is_alive and p.id != hunter_id]
@@ -1722,6 +1730,15 @@ class Judge:
             )
             name = f"{immune_player.seat_number}号({immune_player.name})" if immune_player else "某玩家"
             await self._announce(f"投票结果：{name} 被放逐，但翻牌白痴身份，免疫出局！之后不能投票。")
+            # 公开广播白痴翻牌（合规公开身份，白痴仍存活）。
+            # 使用 publicRole 而非 revealedRole 字段，避免与预言家私发查验结果冲突。
+            await self._broadcast(MessageType.player_update, {
+                "playerId": eliminated_id_for_detail,
+                "playerName": name,
+                "isAlive": True,
+                "publicRole": "idiot",
+                "isIdiotRevealed": True,
+            })
         else:
             # 平票或无人出局
             if result.get("gameStatus") == GameStatus.night:

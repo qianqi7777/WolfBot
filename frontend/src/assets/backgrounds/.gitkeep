@@ -1,0 +1,18 @@
+# 背景图目录
+
+请按以下命名约定放置 webp 文件：
+
+- bg-day.webp          # 桌面端白天 1x（~1920w）
+- bg-day@2x.webp       # 桌面端白天 2x（可选）
+- bg-day-mobile.webp   # 移动端白天（≤768w）
+- bg-night.webp        # 桌面端夜晚 1x
+- bg-night@2x.webp     # 桌面端夜晚 2x（可选）
+- bg-night-mobile.webp # 移动端夜晚
+
+推荐规格：
+- 格式：.webp
+- 桌面尺寸：1920×1080 起
+- 移动尺寸：750×1334 起
+- 大小：建议 <= 300KB / 张
+
+文件缺失时自动 fallback 回当前的 CSS 渐变背景。

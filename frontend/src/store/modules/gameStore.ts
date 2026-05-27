@@ -402,7 +402,14 @@ export const useGameStore = defineStore('game', {
         time: new Date().toISOString(),
       });
     },
-    updatePlayerStatus(playerId: string, isAlive: boolean, isSheriff?: boolean, revealedRole?: RoleType | null) {
+    updatePlayerStatus(
+      playerId: string,
+      isAlive: boolean,
+      isSheriff?: boolean,
+      revealedRole?: RoleType | null,
+      isIdiotRevealed?: boolean,
+      publicRole?: RoleType | null,
+    ) {
       const player = this.players.find((item) => item.id === playerId);
       if (player) {
         player.isAlive = isAlive;
@@ -411,6 +418,12 @@ export const useGameStore = defineStore('game', {
         }
         if (revealedRole !== undefined) {
           player.revealedRole = revealedRole;
+        }
+        if (isIdiotRevealed !== undefined) {
+          player.isIdiotRevealed = isIdiotRevealed;
+        }
+        if (publicRole !== undefined) {
+          player.publicRole = publicRole;
         }
       }
     },

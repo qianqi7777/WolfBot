@@ -1,5 +1,5 @@
 <template>
-  <!-- 角色卡片：图标+阵营+技能描述 -->
+  <!-- 角色卡片：图标+阵营+技能描述（顶栏小卡） -->
   <div class="role-card-v2" :class="{ 'role-unknown': role === 'unknown' }">
     <template v-if="role === 'unknown'">
       <!-- 身份未分配占位 -->
@@ -10,9 +10,17 @@
       </div>
     </template>
     <template v-else>
-      <!-- 角色图标 -->
-      <RoleIcon :role="role" :size="48" />
-      <!-- 角色信息 -->
+      <!-- 有牌面：立绘小卡 + 信息；无牌面：原 SVG 图标 + 信息 -->
+      <div class="role-visual">
+        <img
+          v-if="cardUrl"
+          :src="cardUrl"
+          :alt="roleLabel"
+          class="role-card-thumb"
+          loading="lazy"
+        />
+        <RoleIcon v-else :role="role" :size="48" />
+      </div>
       <div class="role-info">
         <div class="role-name">{{ roleLabel }}</div>
         <!-- 阵营标签 -->
@@ -35,12 +43,16 @@ import { computed } from 'vue';
 
 import type { RoleType } from '@/types/game';
 import { ROLE_LABELS, ROLE_FACTION, FACTION_LABELS, ROLE_SKILL_DESC } from '@/utils/constants';
+import { getRoleCard } from '@/utils/cardImage';
 import RoleIcon from './RoleIcon.vue';
 
 const props = defineProps<{
   /** 当前角色 */
   role: RoleType;
 }>();
+
+/** 牌面图片 URL（缺图时为 null，自动回退到 SVG 图标） */
+const cardUrl = computed(() => getRoleCard(props.role));
 
 /** 角色名称 */
 const roleLabel = computed(() => ROLE_LABELS[props.role]);
@@ -69,6 +81,22 @@ const skillDesc = computed(() => ROLE_SKILL_DESC[props.role]);
 
 .role-unknown {
   opacity: 0.7;
+}
+
+.role-visual {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.role-card-thumb {
+  width: 48px;
+  height: 72px;
+  object-fit: cover;
+  border-radius: 4px;
+  border: 1px solid var(--border-color);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
 }
 
 .role-info {

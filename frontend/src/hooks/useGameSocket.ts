@@ -276,8 +276,26 @@ export function useGameSocket() {
           const revealedRole = isRoleType(message.payload?.revealedRole)
             ? message.payload.revealedRole as RoleType
             : undefined;
-          store.updatePlayerStatus(message.payload.playerId, message.payload.isAlive, isSheriff, revealedRole);
-          if (revealedRole && typeof message.payload?.playerName === 'string') {
+          const publicRole = isRoleType(message.payload?.publicRole)
+            ? message.payload.publicRole as RoleType
+            : undefined;
+          const isIdiotRevealed = isBoolean(message.payload?.isIdiotRevealed)
+            ? message.payload.isIdiotRevealed as boolean
+            : undefined;
+          store.updatePlayerStatus(
+            message.payload.playerId,
+            message.payload.isAlive,
+            isSheriff,
+            revealedRole,
+            isIdiotRevealed,
+            publicRole,
+          );
+          // revealedRole 仅出现在预言家私发的查验结果中：仅预言家本人收到
+          if (
+            revealedRole
+            && store.myRole === 'prophet'
+            && typeof message.payload?.playerName === 'string'
+          ) {
             store.setProphetCheckResult({
               seatLabel: message.payload.playerName,
               role: revealedRole,

@@ -4,13 +4,21 @@
     class="game-play-shell"
     :data-theme="isNight ? 'dark' : 'light'"
   >
-    <!-- 沉浸式背景层 -->
+    <!-- 沉浸式背景层：底图（webp） + 现有 CSS 特效叠加 -->
     <div class="immersive-bg" :class="{ 'is-night': isNight }">
+      <!-- 底图层（用户上传 bg-day/night.webp 后启用） -->
+      <div
+        v-if="enableBackground"
+        class="bg-image-layer"
+        :class="{ 'is-night': isNight }"
+        :style="bgImageStyle"
+      ></div>
+      <!-- 原有 CSS 特效（星空 + 太阳/月亮）叠加在底图之上 -->
       <div class="stars"></div>
       <div class="moon-or-sun"></div>
     </div>
 
-    <!-- 顶栏：GameStatus + CountdownTimer -->
+    <!-- 顶栏：GameStatus + CountdownTimer + RoleCard + SettingsMenu -->
     <div class="game-top-bar">
       <GameStatus :status="store.gameStatus" :round="store.currentRound" />
       <CountdownTimer
@@ -18,6 +26,8 @@
         :total-seconds="currentPhaseTimeout"
       />
       <RoleCard :role="store.myRole" />
+      <div class="top-bar-spacer"></div>
+      <SettingsMenu />
     </div>
 
     <!-- 中央区域：圆桌 + 中央浮动内容 -->
@@ -190,6 +200,9 @@
         <el-button type="primary" @click="showVoteSummaryDialog = false">确 定</el-button>
       </template>
     </el-dialog>
+
+    <!-- 翻牌弹窗：全局唯一，由 useRoleReveal 队列触发 -->
+    <RoleRevealModal />
   </div>
 </template>
 
@@ -208,20 +221,42 @@ import RoleSelect from '@/components/common/RoleSelect.vue';
 import SheriffElection from '@/components/common/SheriffElection.vue';
 import VotePanel from '@/components/common/VotePanel.vue';
 import RoleCard from '@/components/common/RoleCard.vue';
+import RoleRevealModal from '@/components/common/RoleRevealModal.vue';
+import SettingsMenu from '@/components/common/SettingsMenu.vue';
 import GameStatus from '@/components/game/GameStatus.vue';
 import PlayerList from '@/components/game/PlayerList.vue';
 import { useGameLogic } from '@/hooks/useGameLogic';
 import { useGameSocket } from '@/hooks/useGameSocket';
+import { useRoleReveal } from '@/hooks/useRoleReveal';
+import { useUserPreferences } from '@/hooks/useUserPreferences';
 import { useGameStore } from '@/store/modules/gameStore';
+import { getDesktopImageSet, getMobileImageSet } from '@/utils/backgroundImage';
 import type { RoleType } from '@/types/game';
 
 const store = useGameStore();
 const { connect, disconnect, send } = useGameSocket();
 const { canPlayerSpeak, canPlayerVote, canPlayerNightAction } = useGameLogic();
+const { reveal, clear: clearReveal } = useRoleReveal();
+const { enableBackground } = useUserPreferences();
 const router = useRouter();
 
 /** 是否是夜间（用于主题切换） */
 const isNight = computed(() => store.gameStatus === 'night');
+
+/** 背景底图 CSS（基于 enable 开关与当前阶段） */
+const isMobile = ref(typeof window !== 'undefined' && window.matchMedia('(max-width: 768px)').matches);
+if (typeof window !== 'undefined') {
+  const mq = window.matchMedia('(max-width: 768px)');
+  if (typeof mq.addEventListener === 'function') {
+    mq.addEventListener('change', (e) => { isMobile.value = e.matches; });
+  }
+}
+const bgImageStyle = computed(() => {
+  const scene = isNight.value ? 'night' : 'day';
+  const set = isMobile.value ? getMobileImageSet(scene) : getDesktopImageSet(scene);
+  // image-set 不被识别时的兜底（旧 Safari 等）
+  return set ? { backgroundImage: set } : {};
+});
 
 const selfPlayer = computed(() => store.selfPlayer);
 const currentPhaseTimeout = computed(() => store.currentPhaseTimeout);
@@ -499,6 +534,93 @@ onMounted(() => {
   if (store.gameId && store.myId) {
     connect(store.gameId, store.myId);
   }
+  // 进入对局页时清空翻牌队列，避免上一局残留
+  clearReveal();
+  // 防止刷新/重连后重复弹历史翻牌：把当前已存在的翻牌状态预填进已见集合
+  for (const p of store.players) {
+    if (p.isIdiotRevealed) lastSeenReveals.value.add(`idiot:${p.id}`);
+    if (p.publicRole === 'hunter') lastSeenReveals.value.add(`hunter:${p.id}`);
+  }
+  // 防止刷新后重复弹身份卡：若 store 已恢复出真实角色，标记本局已弹过
+  if (store.myRole !== 'unknown' && store.gameId) {
+    try {
+      sessionStorage.setItem(`wolfbot.roleRevealed.${store.gameId}`, '1');
+    } catch { /* sessionStorage 不可用则忽略 */ }
+  }
+});
+
+/** 角色名称（仅 hunter/idiot/wolf 在 watch 中使用，已直接写字面量） */
+function playerLabel(playerId: string): string {
+  const p = store.players.find((x) => x.id === playerId);
+  return p ? `${p.seatNumber}号(${p.name})` : '';
+}
+
+/** 触发点 1：自己被分配身份（私密翻牌） */
+watch(
+  () => store.myRole,
+  (role, prev) => {
+    if (role !== 'unknown' && (prev === undefined || prev === 'unknown')) {
+      // sessionStorage 兜底：同一局只弹一次
+      const key = `wolfbot.roleRevealed.${store.gameId}`;
+      try {
+        if (sessionStorage.getItem(key) === '1') return;
+        sessionStorage.setItem(key, '1');
+      } catch { /* 忽略 */ }
+      reveal({ role, name: playerLabel(store.myId), mode: 'private', title: '你的身份是' });
+    }
+  },
+);
+
+/** 触发点 2：狼人自爆（公开翻牌） */
+watch(
+  () => store.wolfSelfDestructed,
+  (payload, prev) => {
+    if (payload && !prev) {
+      reveal({
+        role: 'wolf',
+        name: payload.playerName,
+        mode: 'public',
+        title: '狼人自爆',
+      });
+    }
+  },
+);
+
+/** 触发点 3 & 4：白痴翻牌 / 猎人翻牌（公开翻牌） */
+const playerRevealKeys = computed(() =>
+  store.players.map((p) => `${p.id}|${p.isIdiotRevealed ? '1' : '0'}|${p.publicRole ?? ''}`).join(','),
+);
+const lastSeenReveals = ref<Set<string>>(new Set());
+watch(playerRevealKeys, () => {
+  const seen = lastSeenReveals.value;
+  for (const p of store.players) {
+    // 白痴翻牌
+    if (p.isIdiotRevealed) {
+      const key = `idiot:${p.id}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        reveal({
+          role: 'idiot',
+          name: `${p.seatNumber}号(${p.name})`,
+          mode: 'public',
+          title: '翻牌：白痴',
+        });
+      }
+    }
+    // 猎人翻牌
+    if (p.publicRole === 'hunter') {
+      const key = `hunter:${p.id}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        reveal({
+          role: 'hunter',
+          name: `${p.seatNumber}号(${p.name})`,
+          mode: 'public',
+          title: '翻牌：猎人',
+        });
+      }
+    }
+  }
 });
 
 watch(
@@ -549,6 +671,21 @@ onUnmounted(() => {
 .immersive-bg.is-night {
   opacity: 0.8;
   background: linear-gradient(to bottom, #0A0A2A 0%, #1A1A3A 100%);
+}
+
+/* 背景底图层（用户上传 bg-day/night.webp 后自动生效） */
+.bg-image-layer {
+  position: absolute;
+  inset: 0;
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  opacity: 0.55;
+  transition: opacity 1.5s ease-in-out;
+  pointer-events: none;
+}
+.bg-image-layer.is-night {
+  opacity: 0.75;
 }
 
 .moon-or-sun {
@@ -605,6 +742,10 @@ onUnmounted(() => {
   border: 1px solid var(--border-color);
   transition: background 0.5s ease, border-color 0.5s ease;
   z-index: 1;
+}
+
+.top-bar-spacer {
+  flex: 1;
 }
 
 /* 中央区域：圆桌 */

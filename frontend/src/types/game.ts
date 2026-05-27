@@ -62,7 +62,10 @@ export interface Player {
   isSpectator?: boolean;
   isIdiotRevealed?: boolean;
   lastProphetTargetId?: string | null;
+  /** 仅预言家私发可见的查验结果角色 */
   revealedRole?: RoleType | null;
+  /** 公开广播翻牌的角色（白痴翻牌、猎人翻牌等合规公开场景） */
+  publicRole?: RoleType | null;
 }
 
 export interface ChatMessage {

@@ -15,6 +15,34 @@
         </el-descriptions>
       </el-card>
 
+      <!-- 全场亮牌仪式：所有玩家的牌从背面依次翻开 -->
+      <el-card v-if="revealPlayers.length > 0">
+        <template #header>全场亮牌</template>
+        <div class="reveal-grid">
+          <div
+            v-for="p in revealPlayers"
+            :key="p.id"
+            class="reveal-card"
+            :class="{ flipped: flippedSet.has(p.id), 'no-motion': !animationsEffective }"
+          >
+            <div class="reveal-card-inner">
+              <!-- 牌背 -->
+              <div class="reveal-card-face reveal-card-back">
+                <img v-if="cardBackUrl" :src="cardBackUrl" alt="牌背" />
+                <div v-else class="css-card-back-mini">
+                  <div class="logo-mark-mini">狼</div>
+                </div>
+              </div>
+              <!-- 牌正面 -->
+              <div class="reveal-card-face reveal-card-front">
+                <RoleCardBig :role="(p.role as RoleType)" :highlight="isWinnerSide(p)" />
+              </div>
+            </div>
+            <div class="reveal-card-name">{{ p.seatNumber }}号({{ p.name }})</div>
+          </div>
+        </div>
+      </el-card>
+
       <!-- MVP / SVP 展示 -->
       <el-card v-if="result?.mvp || result?.svp">
         <template #header>本局最佳</template>
@@ -157,9 +185,12 @@ import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 
 import { getResult } from '@/api/gameApi';
+import RoleCardBig from '@/components/common/RoleCardBig.vue';
+import { useUserPreferences } from '@/hooks/useUserPreferences';
 import { useGameStore } from '@/store/modules/gameStore';
-import type { GameResultPayload, RoleType, RoundEvent } from '@/types/game';
-import { ROLE_LABELS } from '@/utils/constants';
+import type { GameResultPayload, Player, RoleType, RoundEvent } from '@/types/game';
+import { ROLE_LABELS, ROLE_FACTION } from '@/utils/constants';
+import { getCardBack } from '@/utils/cardImage';
 
 const WOLF_FACTION_ROLES: RoleType[] = ['wolf'];
 const GOD_ROLES: RoleType[] = ['prophet', 'guard', 'hunter', 'witch'];
@@ -169,11 +200,31 @@ const router = useRouter();
 const store = useGameStore();
 const result = ref<GameResultPayload | null>(null);
 const roleLabels = ROLE_LABELS;
+const cardBackUrl = computed(() => getCardBack());
+const { animationsEffective } = useUserPreferences();
+
+const flippedSet = ref<Set<string>>(new Set());
 
 const loadResult = async () => {
   result.value = await getResult(props.gameId);
   store.setResult(result.value);
+  // 全场亮牌仪式：依次延迟翻开
+  flippedSet.value = new Set();
+  const list = revealPlayers.value;
+  const stepMs = animationsEffective.value ? 300 : 0;
+  list.forEach((p, idx) => {
+    setTimeout(() => {
+      flippedSet.value = new Set([...flippedSet.value, p.id]);
+    }, 300 + idx * stepMs);
+  });
 };
+
+/** 当前玩家是否属于胜方（高亮用） */
+function isWinnerSide(p: Player): boolean {
+  const faction = result.value?.winnerFaction ?? store.winnerFaction;
+  if (!faction) return false;
+  return ROLE_FACTION[p.role] === faction;
+}
 
 /** 结算页玩家列表（按座位号排序） */
 const revealPlayers = computed(() => {
@@ -367,5 +418,87 @@ onMounted(loadResult);
 .timeline-line {
   line-height: 1.8;
   font-size: 14px;
+}
+
+/* 全场亮牌仪式 */
+.reveal-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 16px;
+  padding: 8px 0;
+}
+
+.reveal-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.reveal-card-inner {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 2 / 3;
+  transition: transform 0.7s cubic-bezier(0.4, 0, 0.2, 1);
+  transform-style: preserve-3d;
+  -webkit-transform-style: preserve-3d;
+}
+
+.reveal-card.flipped .reveal-card-inner {
+  transform: rotateY(180deg);
+}
+
+.reveal-card.no-motion .reveal-card-inner {
+  transition: none;
+}
+
+.reveal-card-face {
+  position: absolute;
+  inset: 0;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.reveal-card-back {
+  z-index: 2;
+}
+
+.reveal-card-front {
+  transform: rotateY(180deg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.reveal-card-back img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.css-card-back-mini {
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(135deg, #1f2937, #0f172a);
+  border: 2px solid #4b5563;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.logo-mark-mini {
+  font-size: 32px;
+  font-weight: 800;
+  color: #fbbf24;
+  letter-spacing: 0.05em;
+}
+
+.reveal-card-name {
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-align: center;
 }
 </style>

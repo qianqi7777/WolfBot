@@ -1,0 +1,19 @@
+# 角色牌面图片目录
+
+请按以下命名约定放置 webp 文件，放进来即自动生效，前端无需改动代码：
+
+- card-back.webp     # 牌背（翻牌动画使用）
+- card-wolf.webp     # 狼人
+- card-civilian.webp # 平民
+- card-prophet.webp  # 预言家
+- card-witch.webp    # 女巫
+- card-guard.webp    # 守卫
+- card-hunter.webp   # 猎人
+- card-idiot.webp    # 白痴
+
+推荐规格：
+- 格式：.webp（Safari 14+ 全支持，体积小）
+- 比例：2:3（如 600×900）
+- 大小：建议 <= 150KB / 张
+
+文件缺失时会自动 fallback 到 SVG 占位卡 CardPlaceholder。
