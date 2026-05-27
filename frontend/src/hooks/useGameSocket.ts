@@ -485,8 +485,14 @@ export function useGameSocket() {
             candidateIds: Array.isArray(message.payload.candidateIds)
               ? message.payload.candidateIds.filter((id: unknown) => typeof id === 'string')
               : [],
+            withdrewIds: Array.isArray(message.payload.withdrewIds)
+              ? (message.payload.withdrewIds as unknown[]).filter((id) => typeof id === 'string') as string[]
+              : undefined,
           };
           store.setSheriffCandidateIds(campaignPayload.candidateIds);
+          if (campaignPayload.withdrewIds) {
+            store.setSheriffWithdrewIds(campaignPayload.withdrewIds);
+          }
           // 也更新 store 的选举开始 payload 中的候选列表
           if (store.sheriffElectStart) {
             store.sheriffElectStart.candidateIds = campaignPayload.candidateIds;
@@ -509,6 +515,7 @@ export function useGameSocket() {
             deadline: typeof message.payload.deadline === 'string' ? message.payload.deadline : '',
             totalSeconds: typeof message.payload.totalSeconds === 'number' ? message.payload.totalSeconds : 15,
             canWithdraw: message.payload.canWithdraw === true,
+            isPk: message.payload.isPk === true,
           };
           store.setSheriffSpeechTurn(speechPayload);
           store.setCurrentSpeakerId(speechPayload.currentSpeakerId);

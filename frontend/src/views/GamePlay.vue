@@ -329,22 +329,13 @@ const handleWolfSelfDestruct = async () => {
   }
 };
 
-/** 预言家查验结果 */
+/** 预言家查验结果（网易规则：仅显示阵营，不显示具体角色） */
 const prophetCheckDisplay = computed(() => {
   if (!store.prophetCheckResult) return null;
-  const roleLabels: Record<RoleType, string> = {
-    wolf: '狼人',
-    civilian: '平民',
-    prophet: '预言家',
-    witch: '女巫',
-    guard: '守卫',
-    hunter: '猎人',
-    idiot: '白痴',
-    unknown: '未知',
-  };
+  const isWolf = store.prophetCheckResult.role === 'wolf';
   return {
     seatLabel: store.prophetCheckResult.seatLabel,
-    roleLabel: roleLabels[store.prophetCheckResult.role] ?? '未知',
+    roleLabel: isWolf ? '狼人' : '好人',
     role: store.prophetCheckResult.role,
   };
 });

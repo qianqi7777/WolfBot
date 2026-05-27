@@ -291,6 +291,7 @@ async def game_ws(websocket: WebSocket) -> None:
                                         "playerId": player_id,
                                         "playerName": display_name,
                                         "candidateIds": game.sheriff_candidate_ids,
+                                        "withdrewIds": game.sheriff_withdrew_ids,
                                     },
                                 ).model_dump_json(),
                             )
@@ -309,6 +310,7 @@ async def game_ws(websocket: WebSocket) -> None:
                                         "playerId": player_id,
                                         "playerName": display_name,
                                         "candidateIds": game.sheriff_candidate_ids,
+                                        "withdrewIds": game.sheriff_withdrew_ids,
                                     },
                                 ).model_dump_json(),
                             )

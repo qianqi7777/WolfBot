@@ -753,11 +753,13 @@ class Judge:
                 "content": f"法官告知：{target_label} 的身份是 {result_text}",
             })
             if target_player:
+                # 网易规则：预言家仅能查到「好人/狼人」阵营，不能查到具体角色（女巫/猎人/守卫等）
+                faction_role = "wolf" if is_wolf else "civilian"
                 await self._send_to_player(str(prophet_id), MessageType.player_update, {
                     "playerId": target_player.id,
                     "playerName": f"{target_player.seat_number}号({target_player.name})",
                     "isAlive": target_player.is_alive,
-                    "revealedRole": target_player.role.value,
+                    "revealedRole": faction_role,
                 })
 
         # 检查胜负
@@ -811,6 +813,7 @@ class Judge:
         await self._broadcast(MessageType.sheriff_campaign, {
             "action": "register_done",
             "candidateIds": candidates,
+            "withdrewIds": game.sheriff_withdrew_ids,
         })
 
         if not candidates:
@@ -936,18 +939,24 @@ class Judge:
             continue_game = await self._handle_wolf_self_destruct(game.wolf_self_destructed, sheriff_election_round=1)
             return continue_game
 
-        # AI 投票（非候选人 AI）
+        # AI 投票（非候选人 AI，排除退水）
         for ai_p in list_ai_players(self.game_id):
-            if ai_p.id not in game.sheriff_candidate_ids:
-                target = self._ai_vote_for_sheriff(ai_p, final_candidates)
-                if target:
-                    record_sheriff_vote(self.game_id, ai_p.id, target)
-                await asyncio.sleep(0.2)
+            if ai_p.id in game.sheriff_candidate_ids:
+                continue
+            if ai_p.id in game.sheriff_withdrew_ids:
+                continue
+            target = self._ai_vote_for_sheriff(ai_p, final_candidates)
+            if target:
+                record_sheriff_vote(self.game_id, ai_p.id, target)
+            await asyncio.sleep(0.2)
 
-        # 等待真人投票
+        # 等待真人投票（排除退水）
         non_candidate_alive = [
             p for p in game.players
-            if p.is_alive and p.id not in game.sheriff_candidate_ids and not p.is_ai
+            if p.is_alive
+            and p.id not in game.sheriff_candidate_ids
+            and p.id not in game.sheriff_withdrew_ids
+            and not p.is_ai
         ]
         end_time = asyncio.get_running_loop().time() + vote_timeout
         while asyncio.get_running_loop().time() < end_time:
@@ -987,12 +996,90 @@ class Judge:
             return True
 
         if is_tie and len(final_candidates) >= 2:
-            # 平票：再来一轮纯投票（网易版第二轮无发言）
-            await self._announce("投票平票，进入第二轮竞选投票")
+            # 平票：先让平票候选人 PK 发言，再投票（网易标准规则）
+            tied_candidate_ids = [
+                str(cid) for cid in result.get("top_candidates", []) if cid
+            ]
+            # 兜底：top_candidates 缺失时退化为所有 final_candidates
+            if not tied_candidate_ids:
+                tied_candidate_ids = list(final_candidates)
+
+            tied_labels = [
+                f"{p.seat_number}号({p.name})"
+                for cid in tied_candidate_ids
+                for p in self._game().players if p.id == cid
+            ]
+            await self._announce(
+                f"投票平票（{', '.join(tied_labels)}），进入 PK 发言阶段"
+            )
             game.sheriff_votes.clear()
 
-            # 第二轮投票
-            await self._announce("第二轮竞选开始，请重新投票选举警长")
+            # ── PK 发言：仅平票候选人，每人 ≤10s ──
+            pk_speak_timeout = min(game.room_settings.scene.speak_timeout_seconds, 10)
+            for turn_idx, candidate_id in enumerate(tied_candidate_ids):
+                current_game = self._game()
+                if current_game.winner_faction is not None:
+                    return False
+                # 检查 PK 阶段狼人自爆
+                if current_game.wolf_self_destructed:
+                    continue_game = await self._handle_wolf_self_destruct(
+                        current_game.wolf_self_destructed, sheriff_election_round=2,
+                    )
+                    return continue_game
+
+                candidate = next(
+                    (p for p in current_game.players if p.id == candidate_id), None,
+                )
+                if not candidate:
+                    continue
+
+                game.current_speaker_id = candidate_id
+                game.sheriff_campaign_submitted = False
+
+                deadline = set_deadline(self.game_id, pk_speak_timeout)
+                await self._broadcast(MessageType.sheriff_speech_turn, {
+                    "currentSpeakerId": candidate_id,
+                    "currentSpeakerName": f"{candidate.seat_number}号({candidate.name})",
+                    "turnIndex": turn_idx + 1,
+                    "turnCount": len(tied_candidate_ids),
+                    "deadline": deadline,
+                    "totalSeconds": pk_speak_timeout,
+                    "canWithdraw": False,  # PK 阶段不能再退水
+                    "isPk": True,
+                })
+                await self._announce(
+                    f"PK 发言 - 轮到 {candidate.seat_number}号({candidate.name}) 发言"
+                )
+
+                if candidate.is_ai:
+                    speech = await self._generate_ai_sheriff_speech(candidate)
+                    record_sheriff_campaign_speak(self.game_id, candidate.id, speech)
+                    await self._broadcast(MessageType.ai_speak, {
+                        "content": speech,
+                        "playerId": candidate.id,
+                        "playerName": f"{candidate.seat_number}号({candidate.name})【PK】",
+                        "isAI": True,
+                    })
+                    await asyncio.sleep(0.3)
+                else:
+                    end_time = asyncio.get_running_loop().time() + pk_speak_timeout
+                    while asyncio.get_running_loop().time() < end_time:
+                        cg = self._game()
+                        if cg.sheriff_campaign_submitted:
+                            break
+                        if cg.wolf_self_destructed:
+                            continue_game = await self._handle_wolf_self_destruct(
+                                cg.wolf_self_destructed, sheriff_election_round=2,
+                            )
+                            return continue_game
+                        await asyncio.sleep(0.25)
+
+                clear_deadline(self.game_id)
+                game.current_speaker_id = None
+                game.sheriff_campaign_submitted = False
+
+            # ── 第二轮投票 ──
+            await self._announce("PK 发言结束，请重新投票选举警长")
             vote_timeout = self._preset_rules.get("vote_timeout_seconds", 30)
             deadline = set_deadline(self.game_id, vote_timeout)
             await self._broadcast(MessageType.sheriff_vote, {
@@ -1002,24 +1089,39 @@ class Judge:
             })
 
             if game.wolf_self_destructed:
-                continue_game = await self._handle_wolf_self_destruct(game.wolf_self_destructed, sheriff_election_round=2)
+                continue_game = await self._handle_wolf_self_destruct(
+                    game.wolf_self_destructed, sheriff_election_round=2,
+                )
                 return continue_game
 
             for ai_p in list_ai_players(self.game_id):
-                if ai_p.id not in game.sheriff_candidate_ids:
-                    target = self._ai_vote_for_sheriff(ai_p, final_candidates)
-                    if target:
-                        record_sheriff_vote(self.game_id, ai_p.id, target)
-                    await asyncio.sleep(0.2)
+                if ai_p.id in game.sheriff_candidate_ids:
+                    continue
+                if ai_p.id in game.sheriff_withdrew_ids:
+                    continue
+                target = self._ai_vote_for_sheriff(ai_p, final_candidates)
+                if target:
+                    record_sheriff_vote(self.game_id, ai_p.id, target)
+                await asyncio.sleep(0.2)
 
+            # 重新计算非候选人存活列表（已排除退水）
+            non_candidate_alive_r2 = [
+                p for p in self._game().players
+                if p.is_alive
+                and p.id not in game.sheriff_candidate_ids
+                and p.id not in game.sheriff_withdrew_ids
+                and not p.is_ai
+            ]
             end_time = asyncio.get_running_loop().time() + vote_timeout
             while asyncio.get_running_loop().time() < end_time:
                 current_game = self._game()
                 if current_game.wolf_self_destructed:
-                    continue_game = await self._handle_wolf_self_destruct(current_game.wolf_self_destructed, sheriff_election_round=2)
+                    continue_game = await self._handle_wolf_self_destruct(
+                        current_game.wolf_self_destructed, sheriff_election_round=2,
+                    )
                     return continue_game
                 voted_ids = {str(v.get("voterId", "")) for v in current_game.sheriff_votes}
-                if all(p.id in voted_ids for p in non_candidate_alive):
+                if all(p.id in voted_ids for p in non_candidate_alive_r2):
                     break
                 await asyncio.sleep(0.5)
             clear_deadline(self.game_id)

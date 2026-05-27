@@ -116,6 +116,7 @@ class GameSnapshot(BaseSchema):
     game_mode: str = Field(default="classic", alias="gameMode")
     sheriff_id: str | None = Field(default=None, alias="sheriffId")
     sheriff_candidate_ids: list[str] = Field(default_factory=list, alias="sheriffCandidateIds")
+    sheriff_withdrew_ids: list[str] = Field(default_factory=list, alias="sheriffWithdrewIds")
     room_code: str = Field(default="", alias="roomCode")
     is_spectator: bool = Field(default=False, alias="isSpectator")
 

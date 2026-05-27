@@ -4,7 +4,9 @@
       <div class="sheriff-header">
         <span>警长竞选</span>
         <el-tag v-if="electionPhase === 'campaign'" type="warning" size="small">上警阶段</el-tag>
-        <el-tag v-else-if="electionPhase === 'speech'" type="info" size="small">竞选发言</el-tag>
+        <el-tag v-else-if="electionPhase === 'speech'" :type="isPkSpeech ? 'danger' : 'info'" size="small">
+          {{ isPkSpeech ? '平票 PK 发言' : '竞选发言' }}
+        </el-tag>
         <el-tag v-else-if="electionPhase === 'vote'" type="success" size="small">投票选举</el-tag>
         <el-tag v-else-if="electionPhase === 'result'" type="primary" size="small">竞选结果</el-tag>
       </div>
@@ -12,23 +14,34 @@
 
     <!-- 上警阶段 -->
     <div v-if="electionPhase === 'campaign'" class="election-phase">
-      <p class="phase-desc">选择是否上警参加警长竞选</p>
-      <div class="campaign-actions">
-        <el-button
-          v-if="!isCandidate && isAlive"
-          type="warning"
-          @click="handleCampaign('run')"
-        >
-          上警竞选
-        </el-button>
-        <el-button
-          v-if="isCandidate"
+      <template v-if="isCampaignClosed">
+        <el-alert
           type="info"
-          @click="handleCampaign('withdraw')"
-        >
-          退选
-        </el-button>
-      </div>
+          :closable="false"
+          title="封警 — 上警通道已关闭"
+          description="倒计时结束，本轮不再接受上警/退选，进入竞选发言"
+          show-icon
+        />
+      </template>
+      <template v-else>
+        <p class="phase-desc">选择是否上警参加警长竞选</p>
+        <div class="campaign-actions">
+          <el-button
+            v-if="!isCandidate && isAlive"
+            type="warning"
+            @click="handleCampaign('run')"
+          >
+            上警竞选
+          </el-button>
+          <el-button
+            v-if="isCandidate"
+            type="info"
+            @click="handleCampaign('withdraw')"
+          >
+            退选
+          </el-button>
+        </div>
+      </template>
       <div v-if="candidateNames.length" class="candidate-list">
         <p>已上警玩家：</p>
         <el-tag
@@ -41,33 +54,66 @@
           {{ name }}
         </el-tag>
       </div>
+      <div v-if="withdrewNames.length" class="candidate-list">
+        <p>已退水玩家（本轮无投票权）：</p>
+        <el-tag
+          v-for="name in withdrewNames"
+          :key="name"
+          type="info"
+          effect="plain"
+          class="candidate-tag"
+        >
+          {{ name }}
+        </el-tag>
+      </div>
     </div>
 
-    <!-- 竞选发言阶段 -->
+    <!-- 竞选发言阶段（含 PK 发言） -->
     <div v-else-if="electionPhase === 'speech'" class="election-phase">
+      <el-alert
+        v-if="isPkSpeech"
+        type="warning"
+        :closable="false"
+        title="平票 PK 发言"
+        description="仅平票候选人发言，发言后将重新投票；PK 阶段不能退水"
+        show-icon
+        style="margin-bottom: 12px"
+      />
       <p v-if="currentSpeakerName" class="phase-desc">
-        轮到 <strong>{{ currentSpeakerName }}</strong> 竞选发言
+        轮到 <strong>{{ currentSpeakerName }}</strong>
+        {{ isPkSpeech ? 'PK 发言' : '竞选发言' }}
       </p>
       <div v-if="isCurrentSpeaker" class="speech-actions">
-        <ChatBox
-          :messages="[]"
-          :disabled="false"
-          :my-id="store.myId"
-          @submit="handleCampaignSpeech"
-        />
-        <el-button
-          v-if="isCandidate"
-          type="info"
-          size="small"
-          class="withdraw-btn"
-          @click="handleCampaign('withdraw')"
-        >
-          退水（放弃竞选）
-        </el-button>
+        <template v-if="isWithdrew">
+          <el-alert
+            type="info"
+            :closable="false"
+            description="你已退水，本轮不再发言，等待下一位候选人"
+            show-icon
+          />
+        </template>
+        <template v-else>
+          <ChatBox
+            :messages="[]"
+            :disabled="false"
+            :my-id="store.myId"
+            @submit="handleCampaignSpeech"
+          />
+          <el-button
+            v-if="canWithdrawNow"
+            type="info"
+            size="small"
+            class="withdraw-btn"
+            @click="handleCampaign('withdraw')"
+          >
+            退水（放弃竞选）
+          </el-button>
+        </template>
       </div>
       <div v-else-if="isCandidate && !isCurrentSpeaker" class="waiting-hint">
-        <el-alert type="info" :closable="false" description="等待其他候选人发言..." />
+        <el-alert type="info" :closable="false" :description="isPkSpeech ? '等待其他平票候选人 PK 发言...' : '等待其他候选人发言...'" />
         <el-button
+          v-if="canWithdrawNow"
           type="info"
           size="small"
           class="withdraw-btn"
@@ -83,9 +129,12 @@
 
     <!-- 投票选举阶段 -->
     <div v-else-if="electionPhase === 'vote'" class="election-phase">
-      <p class="phase-desc">请投票选举警长（非候选人才能投票）</p>
+      <p class="phase-desc">请投票选举警长（候选人与退水玩家不参与投票）</p>
       <div v-if="isCandidate" class="waiting-hint">
         <el-alert type="info" :closable="false" description="你是候选人，不能投票" />
+      </div>
+      <div v-else-if="isWithdrew" class="waiting-hint">
+        <el-alert type="warning" :closable="false" description="你已退水，本轮警长竞选无投票权" show-icon />
       </div>
       <div v-else-if="!isAlive" class="waiting-hint">
         <el-alert type="info" :closable="false" description="你已死亡，不能投票" />
@@ -140,13 +189,23 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, onMounted, onUnmounted, ref } from 'vue';
 import ChatBox from './ChatBox.vue';
 import { useGameStore } from '@/store/modules/gameStore';
 import { useGameSocket } from '@/hooks/useGameSocket';
 
 const store = useGameStore();
 const { send } = useGameSocket();
+
+// 每秒驱动一次的当前时间戳，用于判断上警倒计时是否归零
+const nowTs = ref(Date.now());
+let nowTimer: ReturnType<typeof setInterval> | null = null;
+onMounted(() => {
+  nowTimer = setInterval(() => { nowTs.value = Date.now(); }, 1000);
+});
+onUnmounted(() => {
+  if (nowTimer) clearInterval(nowTimer);
+});
 
 // 竞选阶段判断
 const electionPhase = computed(() => {
@@ -159,6 +218,24 @@ const electionPhase = computed(() => {
 
 const isAlive = computed(() => store.selfPlayer?.isAlive ?? false);
 const isCandidate = computed(() => store.myId ? store.sheriffCandidateIds.includes(store.myId) : false);
+const isWithdrew = computed(() => store.myId ? store.sheriffWithdrewIds.includes(store.myId) : false);
+const isPkSpeech = computed(() => store.sheriffSpeechTurn?.isPk === true);
+/** 当前是否允许退水：必须是候选人 + 在发言阶段 + 后端允许（PK 阶段 canWithdraw=false） */
+const canWithdrawNow = computed(() => {
+  if (!isCandidate.value) return false;
+  if (electionPhase.value !== 'speech') return false;
+  // sheriffSpeechTurn.canWithdraw 显式 false 时禁用；undefined 时默认允许（向后兼容）
+  return store.sheriffSpeechTurn?.canWithdraw !== false;
+});
+
+/** 上警阶段：倒计时归零 → 封警（按钮置灰 + alert） */
+const isCampaignClosed = computed(() => {
+  if (electionPhase.value !== 'campaign') return false;
+  const deadline = store.sheriffElectStart?.deadline ?? store.deadline;
+  if (!deadline) return false;
+  const ts = Date.parse(deadline);
+  return Number.isFinite(ts) && ts <= nowTs.value;
+});
 const isCurrentSpeaker = computed(() =>
   store.sheriffSpeechTurn?.currentSpeakerId === store.myId
 );
@@ -172,6 +249,13 @@ const votedFor = computed(() => {
 
 const candidateNames = computed(() => {
   return store.sheriffCandidateIds.map(id => {
+    const p = store.players.find(p => p.id === id);
+    return p ? `${p.seatNumber}号(${p.name})` : id;
+  });
+});
+
+const withdrewNames = computed(() => {
+  return store.sheriffWithdrewIds.map(id => {
     const p = store.players.find(p => p.id === id);
     return p ? `${p.seatNumber}号(${p.name})` : id;
   });

@@ -58,6 +58,7 @@ export interface GameState {
   // 警长相关
   sheriffId: string | null;
   sheriffCandidateIds: string[];
+  sheriffWithdrewIds: string[];
   sheriffElectStart: SheriffElectStartPayload | null;
   sheriffSpeechTurn: SheriffSpeechTurnPayload | null;
   sheriffVoteStart: SheriffVotePayload | null;
@@ -187,6 +188,7 @@ export const useGameStore = defineStore('game', {
     isLastWords: false,
     sheriffId: null,
     sheriffCandidateIds: [],
+    sheriffWithdrewIds: [],
     sheriffElectStart: null,
     sheriffSpeechTurn: null,
     sheriffVoteStart: null,
@@ -233,6 +235,9 @@ export const useGameStore = defineStore('game', {
       }
       if (Array.isArray(snapshot.sheriffCandidateIds)) {
         this.sheriffCandidateIds = snapshot.sheriffCandidateIds as string[];
+      }
+      if (Array.isArray(snapshot.sheriffWithdrewIds)) {
+        this.sheriffWithdrewIds = snapshot.sheriffWithdrewIds as string[];
       }
       // 如果是从 waiting 状态回来（新房间），清理上一局的游戏内数据
       if (snapshot.gameStatus === 'waiting') {
@@ -358,6 +363,9 @@ export const useGameStore = defineStore('game', {
     setSheriffCandidateIds(ids: string[]) {
       this.sheriffCandidateIds = ids;
     },
+    setSheriffWithdrewIds(ids: string[]) {
+      this.sheriffWithdrewIds = ids;
+    },
     setSheriffElectStart(payload: SheriffElectStartPayload) {
       this.sheriffElectStart = payload;
     },
@@ -380,6 +388,7 @@ export const useGameStore = defineStore('game', {
       this.sheriffElectResult = null;
       this.sheriffTransfer = null;
       this.sheriffCandidateIds = [];
+      this.sheriffWithdrewIds = [];
     },
     // 狼人自爆 actions
     setWolfSelfDestructed(payload: WolfSelfDestructPayload) {
@@ -471,6 +480,7 @@ export const useGameStore = defineStore('game', {
       this.isLastWords = false;
       this.sheriffId = null;
       this.sheriffCandidateIds = [];
+      this.sheriffWithdrewIds = [];
       this.sheriffElectStart = null;
       this.sheriffSpeechTurn = null;
       this.sheriffVoteStart = null;

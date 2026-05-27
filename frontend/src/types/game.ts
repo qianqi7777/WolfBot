@@ -200,6 +200,7 @@ export interface SheriffCampaignPayload {
   playerId?: string;
   playerName?: string;
   candidateIds: string[];
+  withdrewIds?: string[];
 }
 
 // 警长竞选发言轮次
@@ -211,6 +212,8 @@ export interface SheriffSpeechTurnPayload {
   deadline: string;
   totalSeconds: number;
   canWithdraw?: boolean;
+  /** 是否处于平票 PK 发言阶段 */
+  isPk?: boolean;
 }
 
 // 警长竞选投票载荷
@@ -273,6 +276,7 @@ export interface GameSnapshot {
   gameMode: GameMode;
   sheriffId?: string | null;
   sheriffCandidateIds?: string[];
+  sheriffWithdrewIds?: string[];
   roomCode?: string;
   isSpectator?: boolean;
 }

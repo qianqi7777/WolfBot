@@ -168,8 +168,12 @@ const badgeInfo = computed(() => {
     return { label: '白痴', type: 'public' };
   }
 
-  if (props.player.revealedRole && props.player.revealedRole !== 'unknown' && roleLabels[props.player.revealedRole]) {
-    return { label: roleLabels[props.player.revealedRole], type: 'public' };
+  // 预言家查验结果仅暴露阵营（wolf / civilian），不显示具体角色
+  if (props.player.revealedRole === 'wolf') {
+    return { label: '狼', type: 'public' };
+  }
+  if (props.player.revealedRole === 'civilian') {
+    return { label: '好', type: 'public' };
   }
 
   if (props.isWolfTeammate) {

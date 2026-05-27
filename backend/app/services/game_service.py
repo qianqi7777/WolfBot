@@ -113,6 +113,7 @@ class GameState:
     # 警长相关
     sheriff_id: str | None = None  # 当前警长玩家 ID
     sheriff_candidate_ids: list[str] = field(default_factory=list)  # 竞选候选人列表
+    sheriff_withdrew_ids: list[str] = field(default_factory=list)  # 竞选中退水的玩家（本阶段失去投票权）
     sheriff_votes: list[dict[str, object]] = field(default_factory=list)  # 警长竞选投票
     sheriff_campaign_submitted: bool = False  # 竞选发言已提交标记
     # 狼人自爆相关
@@ -262,6 +263,7 @@ def _snapshot(game: GameState, player_id: str, my_role: RoleType = RoleType.unkn
         game_mode=game.game_mode,
         sheriff_id=game.sheriff_id,
         sheriff_candidate_ids=game.sheriff_candidate_ids,
+        sheriff_withdrew_ids=game.sheriff_withdrew_ids,
         room_code=game.room_code,
         is_spectator=is_spectator,
     )
@@ -1379,12 +1381,16 @@ def register_sheriff_campaign(game_id: str, player_id: str) -> None:
         raise AppError("已死亡玩家不能参加竞选", status_code=409)
     if player_id in game.sheriff_candidate_ids:
         raise AppError("你已经上警了", status_code=409)
+    if player_id in game.sheriff_withdrew_ids:
+        raise AppError("你已退水，本轮不能再上警", status_code=409)
     game.sheriff_candidate_ids.append(player_id)
     game.announcements.append(f"{player.seat_number}号({player.name}) 上警竞选")
 
 
 def withdraw_sheriff_campaign(game_id: str, player_id: str) -> None:
-    """玩家退选"""
+    """玩家退选（退水）。
+    网易规则：退水即放弃竞选 + 失去本阶段投票权。
+    """
     game = _get_game_or_raise(game_id)
     if game.game_status != GameStatus.sheriff_election:
         raise AppError("当前不是警长竞选阶段", status_code=409)
@@ -1392,6 +1398,8 @@ def withdraw_sheriff_campaign(game_id: str, player_id: str) -> None:
         raise AppError("你未参加竞选", status_code=409)
     player = next((p for p in game.players if p.id == player_id), None)
     game.sheriff_candidate_ids.remove(player_id)
+    if player_id not in game.sheriff_withdrew_ids:
+        game.sheriff_withdrew_ids.append(player_id)
     if player:
         game.announcements.append(f"{player.seat_number}号({player.name}) 退选")
 
@@ -1408,6 +1416,8 @@ def record_sheriff_vote(game_id: str, voter_id: str, target_id: str) -> None:
         raise AppError("已死亡玩家不能投票", status_code=409)
     if voter_id in game.sheriff_candidate_ids:
         raise AppError("候选人不能投票", status_code=409)
+    if voter_id in game.sheriff_withdrew_ids:
+        raise AppError("你已退水，本阶段不能投票", status_code=409)
     is_abstain = not target_id or target_id == "abstain"
     if not is_abstain:
         if target_id not in game.sheriff_candidate_ids:
@@ -1445,22 +1455,22 @@ def resolve_sheriff_election(game_id: str) -> dict[str, object]:
         tally[tid] = tally.get(tid, 0) + 1
 
     if not tally:
-        # 全部弃权，无警长
+        # 全部弃权，无警长（无候选人能 PK）
         game.sheriff_votes.clear()
-        return {"sheriff_id": None, "is_tie": True}
+        return {"sheriff_id": None, "is_tie": True, "top_candidates": []}
 
     max_votes = max(tally.values())
     top_candidates = [tid for tid, count in tally.items() if count == max_votes]
 
     if len(top_candidates) > 1:
-        # 平票，无人当选
+        # 平票，无人当选；返回 top_candidates 供 PK 发言阶段使用
         game.sheriff_votes.clear()
-        return {"sheriff_id": None, "is_tie": True}
+        return {"sheriff_id": None, "is_tie": True, "top_candidates": top_candidates}
 
     sheriff_id = top_candidates[0]
     _set_sheriff(game_id, sheriff_id)
     game.sheriff_votes.clear()
-    return {"sheriff_id": sheriff_id, "is_tie": False}
+    return {"sheriff_id": sheriff_id, "is_tie": False, "top_candidates": top_candidates}
 
 
 def _set_sheriff(game_id: str, sheriff_id: str) -> None:
@@ -1497,6 +1507,7 @@ def clear_sheriff_election(game_id: str) -> None:
     """清空竞选状态"""
     game = _get_game_or_raise(game_id)
     game.sheriff_candidate_ids.clear()
+    game.sheriff_withdrew_ids.clear()
     game.sheriff_votes.clear()
     game.sheriff_campaign_submitted = False
 
