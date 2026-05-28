@@ -699,7 +699,9 @@ class Judge:
                 "playerName": name,
             })
 
-        # 遗言处理：为每个死亡玩家处理遗言
+        # 遗言处理：为每个死亡玩家处理遗言。
+        # 若夜间结算已直接触发胜负（game_status 切到 end），跳过遗言以免 record_last_words 拒收。
+        already_ended = self._game().winner_faction is not None
         for dead_id in all_killed_ids:
             dead_player = next((p for p in self._game().players if p.id == dead_id), None)
             if not dead_player:
@@ -710,7 +712,7 @@ class Judge:
                 allow_last_words = False
             elif self._mode:
                 allow_last_words = await self._mode.on_night_death(self.game_id, is_first_night)
-            if allow_last_words:
+            if allow_last_words and not already_ended:
                 await self._announce(f"{name} 可以发表遗言（首夜遗言）")
                 await self._wait_last_words(dead_id, name, timeout_seconds=self._preset_rules.get("last_words_timeout_seconds", 30))
 
@@ -1460,12 +1462,15 @@ class Judge:
                 await self._announce("竞选阶段狼人自爆，本轮竞选终止，当日无警长。")
                 clear_sheriff_election(self.game_id)
         else:
-            # 非竞选阶段自爆：自爆狼人发表遗言
-            await self._announce(f"{name} 可以发表遗言")
-            await self._wait_last_words(player_id, name, timeout_seconds=self._preset_rules.get("last_words_timeout_seconds", 30))
+            # 非竞选阶段自爆：自爆狼人发表遗言。
+            # 若自爆已直接触发胜负（record_self_destruct 把 game_status 切到 end），
+            # 跳过遗言以免 record_last_words 拒收。
+            if self._game().winner_faction is None:
+                await self._announce(f"{name} 可以发表遗言")
+                await self._wait_last_words(player_id, name, timeout_seconds=self._preset_rules.get("last_words_timeout_seconds", 30))
 
-        # 警长转让
-        if game.sheriff_id == player_id:
+        # 警长转让：终局已无意义，跳过以免广播多余 UI 并阻塞
+        if game.sheriff_id == player_id and self._game().winner_faction is None:
             await self._handle_sheriff_death(player_id)
 
         # 清除自爆状态
@@ -1815,15 +1820,16 @@ class Judge:
                 "isAlive": False,
                 "playerName": name,
             })
-            # 被放逐者发表遗言（由模式决定）
+            # 被放逐者发表遗言（由模式决定）。若该次放逐已直接触发胜负，
+            # 游戏状态会被切到 end，此时遗言阶段已无意义且 record_last_words 会拒收，跳过。
             allow_last_words = True
             if self._mode:
                 allow_last_words = await self._mode.on_vote_elimination(self.game_id)
-            if allow_last_words:
+            if allow_last_words and not winner_faction:
                 await self._announce(f"{name} 可以发表遗言")
                 await self._wait_last_words(eliminated_id, name, timeout_seconds=self._preset_rules.get("last_words_timeout_seconds", 30))
-            # 警长被放逐：转让徽章
-            if eliminated and game.sheriff_id == eliminated_id:
+            # 警长被放逐：转让徽章。终局已无意义，跳过以免广播多余 UI 并阻塞 30s 等待。
+            if eliminated and game.sheriff_id == eliminated_id and not winner_faction:
                 await self._handle_sheriff_death(eliminated_id)
         elif idiot_immunity and eliminated_id_for_detail:
             # 白痴翻牌免疫
