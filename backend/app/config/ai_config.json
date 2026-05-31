@@ -1,8 +1,8 @@
 {
-  "base_url": "https://ark.cn-beijing.volces.com/api/v3",
-  "api_key": "ark-9d875fda-2230-413c-b729-a04ee49815b4-b4190",
-  "model": "doubao-seed-2-0-lite-260215",
-  "timeout_seconds": 35.0,
-  "temperature": 0.7,
+  "base_url": "https://example.com/v1",
+  "api_key": "secret-key",
+  "model": "gpt-4o-mini",
+  "timeout_seconds": 15.0,
+  "temperature": 0.5,
   "enable_mock": false
 }

@@ -35,21 +35,9 @@ export const SCENE_PRESET_OPTIONS: Array<{
     playerCount: 6,
   },
   {
-    value: 'nine-player-dark',
-    label: '9人暗牌场',
-    description: '3狼6好人，神职为预言家、守卫、猎人，暗牌局，无警长。',
-    playerCount: 9,
-  },
-  {
-    value: 'twelve-player-dark',
-    label: '12人暗牌场',
-    description: '4狼8好人，神职为预言家、守卫、女巫、猎人，暗牌局，有警长。',
-    playerCount: 12,
-  },
-  {
     value: 'twelve-player-standard-dark',
     label: '12人标准暗牌场（预女猎白）',
-    description: '4狼8好人，神职为预言家、女巫、猎人、白痴，屠边规则。',
+    description: '4狼8好人，神职为预言家、女巫、猎人、白痴，暗牌局，有警长，屠边规则。',
     playerCount: 12,
   },
 ];

@@ -941,24 +941,28 @@ class Judge:
             continue_game = await self._handle_wolf_self_destruct(game.wolf_self_destructed, sheriff_election_round=1)
             return continue_game
 
-        # AI 投票（非候选人 AI，排除退水）
+        # AI 投票（非候选人 AI，排除退水和已翻牌白痴）
         for ai_p in list_ai_players(self.game_id):
             if ai_p.id in game.sheriff_candidate_ids:
                 continue
             if ai_p.id in game.sheriff_withdrew_ids:
+                continue
+            # 白痴翻牌后不能投票
+            if ai_p.vote_immunity_used:
                 continue
             target = self._ai_vote_for_sheriff(ai_p, final_candidates)
             if target:
                 record_sheriff_vote(self.game_id, ai_p.id, target)
             await asyncio.sleep(0.2)
 
-        # 等待真人投票（排除退水）
+        # 等待真人投票（排除退水和已翻牌白痴）
         non_candidate_alive = [
             p for p in game.players
             if p.is_alive
             and p.id not in game.sheriff_candidate_ids
             and p.id not in game.sheriff_withdrew_ids
             and not p.is_ai
+            and not p.vote_immunity_used
         ]
         end_time = asyncio.get_running_loop().time() + vote_timeout
         while asyncio.get_running_loop().time() < end_time:
@@ -1101,18 +1105,22 @@ class Judge:
                     continue
                 if ai_p.id in game.sheriff_withdrew_ids:
                     continue
+                # 白痴翻牌后不能投票
+                if ai_p.vote_immunity_used:
+                    continue
                 target = self._ai_vote_for_sheriff(ai_p, final_candidates)
                 if target:
                     record_sheriff_vote(self.game_id, ai_p.id, target)
                 await asyncio.sleep(0.2)
 
-            # 重新计算非候选人存活列表（已排除退水）
+            # 重新计算非候选人存活列表（已排除退水和已翻牌白痴）
             non_candidate_alive_r2 = [
                 p for p in self._game().players
                 if p.is_alive
                 and p.id not in game.sheriff_candidate_ids
                 and p.id not in game.sheriff_withdrew_ids
                 and not p.is_ai
+                and not p.vote_immunity_used
             ]
             end_time = asyncio.get_running_loop().time() + vote_timeout
             while asyncio.get_running_loop().time() < end_time:
@@ -1493,8 +1501,19 @@ class Judge:
 
     def _ai_should_self_destruct(self, player) -> bool:
         """AI 狼人决定是否自爆。
-        策略：当剩余狼人≥2且好人优势极大时，有概率自爆打断发言。"""
+        策略：只有在特定不利情况下才考虑自爆，正常情况下不自爆。
+
+        网易狼人杀自爆规则：
+        - 自爆目的：保护队友、打断发言节奏、避免被投票出局
+        - 自爆时机：被预言家查验、即将被投票、队友暴露等
+        - 自爆不应该是随机行为，而是战略决策
+        """
         game = self._game()
+
+        # 首先检查：只有狼人才能自爆
+        if SKILL_REGISTRY[player.role].faction != "wolf":
+            return False
+
         alive_wolves = [p for p in game.players if p.is_alive and SKILL_REGISTRY[p.role].faction == "wolf"]
         alive_non_wolves = [p for p in game.players if p.is_alive and SKILL_REGISTRY[p.role].faction != "wolf"]
 
@@ -1502,12 +1521,21 @@ class Judge:
         if len(alive_wolves) <= 1:
             return False
 
-        # 好人数量远超狼人时考虑自爆
-        if len(alive_non_wolves) >= len(alive_wolves) * 3:
-            return random.random() < 0.08  # 8%概率
+        # 正常情况下，AI狼人不应该自爆
+        # 自爆应该是在特定压力下的战略选择，而不是随机行为
+        # TODO: 未来可以根据以下情况考虑自爆：
+        # 1. 被预言家查验后（需要记录查验信息）
+        # 2. 发言内容暴露身份（需要分析发言内容）
+        # 3. 即将被投票出局（需要预测投票结果）
+        # 4. 队友已经暴露需要保护（需要分析场上信息）
 
-        # 默认很低概率自爆
-        return random.random() < 0.02  # 2%概率
+        # 当前简化策略：极端劣势时极低概率自爆
+        # 好人数量是狼人4倍以上，且轮次较后时，极低概率自爆
+        if len(alive_non_wolves) >= len(alive_wolves) * 4 and game.current_round >= 3:
+            return random.random() < 0.005  # 0.5%概率
+
+        # 默认不自爆
+        return False
 
     # ------------------------------------------------------------------
     #  白天阶段
@@ -1607,7 +1635,7 @@ class Judge:
             self.game_id,
             speak_order_rule,
             sheriff_id=sheriff_id,
-            first_dead_player_id=first_dead_player_id if not sheriff_id else None,
+            first_dead_player_id=first_dead_player_id,
             speak_direction=speak_direction,
         )
         speak_turn_ids = game.speak_order or [
@@ -1703,8 +1731,11 @@ class Judge:
         })
         await self._announce("现在进入投票阶段，请投票放逐一名玩家")
 
-        # AI 投票
+        # AI 投票（排除已翻牌的白痴）
         for ai_player in list_ai_players(self.game_id):
+            # 白痴翻牌后不能投票
+            if ai_player.vote_immunity_used:
+                continue
             logger.info("[Judge] game=%s AI玩家 %s 投票中...", self.game_id, ai_player.name)
             target_id = await _generate_ai_vote(self.game_id, ai_player.id)
             record_vote(self.game_id, ai_player.id, target_id)

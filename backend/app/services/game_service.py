@@ -294,7 +294,7 @@ def _alive_speak_order(
     alive.sort(key=lambda p: p.seat_number)
 
     if sheriff_id:
-        # 有警长：从警长旁边开始，按方向排列
+        # 有警长：从昨夜死者的下一位开始（如果有死者），按警长选择的方向排列，警长最后发言
         sheriff = next((p for p in alive if p.id == sheriff_id), None)
         if not sheriff:
             # 警长不在存活列表中（不应发生），回退到按座位
@@ -305,34 +305,40 @@ def _alive_speak_order(
         if seat_count <= 1:
             return [p.id for p in alive]
 
-        # 找到警长在排序后列表中的索引
-        sheriff_index = next(i for i, p in enumerate(alive) if p.id == sheriff_id)
-
-        # 从警长旁边开始排列（排除警长）
+        # 排除警长，得到其他存活玩家
         others = [p for p in alive if p.id != sheriff_id]
         if not others:
             return [p.id for p in alive]
 
-        # 找到警长旁边第一个人的起始位置
-        if direction == "left":
-            # 逆时针：从警长左边（座位号较小方向）的人开始
-            start_index = (sheriff_index - 1) % seat_count
-            # 如果 start_index 指向的是警长自己，再往前移一位
-            if alive[start_index].id == sheriff_id:
-                start_index = (start_index - 1) % seat_count
+        # 确定起始位置
+        start_index = 0
+        if first_dead_player_id:
+            # 有死者：从死者座位号的下一位开始
+            dead_player = next((p for p in game.players if p.id == first_dead_player_id), None)
+            if dead_player:
+                dead_seat = dead_player.seat_number
+                # 在排除警长的列表中，找第一个座位号 > dead_seat 的玩家
+                for i, p in enumerate(others):
+                    if p.seat_number > dead_seat:
+                        start_index = i
+                        break
+                else:
+                    # 死者座位号最大，从第一个玩家开始
+                    start_index = 0
         else:
-            # 顺时针：从警长右边（座位号较大方向）的人开始
-            start_index = (sheriff_index + 1) % seat_count
-            if alive[start_index].id == sheriff_id:
-                start_index = (start_index + 1) % seat_count
+            # 无死者（平安夜或双死）：随机起始位置
+            start_index = random.randint(0, len(others) - 1) if others else 0
 
-        # 从 start_index 开始，绕一圈排列其他人
-        start_player = alive[start_index]
-        other_index = next(i for i, p in enumerate(others) if p.id == start_player.id)
-
+        # 按方向排列
         ordered_others = []
-        for i in range(len(others)):
-            ordered_others.append(others[(other_index + i) % len(others)])
+        if direction == "left":
+            # 逆时针：从起始位置逆向排列
+            for i in range(len(others)):
+                ordered_others.append(others[(start_index - i) % len(others)])
+        else:
+            # 顺时针：从起始位置顺向排列
+            for i in range(len(others)):
+                ordered_others.append(others[(start_index + i) % len(others)])
 
         # 警长放最后
         result = [p.id for p in ordered_others] + [sheriff_id]
@@ -805,10 +811,11 @@ def record_sheriff_campaign_speak(game_id: str, player_id: str, content: str) ->
 
 def record_last_words(game_id: str, player_id: str, content: str) -> None:
     """记录遗言。允许已死亡玩家在遗言阶段发言。
-    遗言可能发生在夜间（首夜死亡）、投票后（被放逐），此时 game_status 为 night 或 vote，
+    遗言可能发生在夜间（首夜死亡）、投票后（被放逐）、发言阶段（狼人自爆）、竞选阶段（狼人自爆），
+    此时 game_status 为 night、vote、speak 或 sheriff_election，
     通过 current_speaker_id 限制只有当前遗言者才能发言。"""
     game = _get_game_or_raise(game_id)
-    if game.game_status not in (GameStatus.day, GameStatus.night, GameStatus.vote):
+    if game.game_status not in (GameStatus.day, GameStatus.night, GameStatus.vote, GameStatus.speak, GameStatus.sheriff_election):
         raise AppError("当前不是遗言阶段", status_code=409)
     speaker = next((item for item in game.players if item.id == player_id), None)
     if speaker is None:
